@@ -3,6 +3,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -17,9 +20,12 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
       - name: Build NeoForge jar
-        run: ./gradlew :squaremap-neoforge:build
+        run: |
+          chmod +x gradlew
+          ./gradlew :squaremap-neoforge:build
       - name: Upload NeoForge artifact
         uses: actions/upload-artifact@v4
         with:
           name: squaremap-neoforge-1.21.1
-          path: neoforge/build/libs/*.jar
+          path: build/libs/*.jar
+          if-no-files-found: error

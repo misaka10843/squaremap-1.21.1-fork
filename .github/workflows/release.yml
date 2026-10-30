@@ -1,0 +1,144 @@
+name: Release NeoForge 1.21.1 (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag: must equal v + the version in gradle.properties'
+        required: true
+        type: string
+        default: v1.3.2-fork.2
+      draft:
+        description: Create a draft release for manual publication
+        type: boolean
+        default: true
+      prerelease:
+        description: Mark this release as a prerelease
+        type: boolean
+        default: true
+      run_tests:
+        description: Run Java regression tests before building
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.repository }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      artifact: ${{ steps.version.outputs.artifact }}
+    steps:
+      - name: Checkout selected revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Validate release version
+        id: version
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import re
+          import subprocess
+
+          properties = pathlib.Path('gradle.properties').read_text(encoding='utf-8')
+          version = re.search(r'^version=(.+)$', properties, re.MULTILINE).group(1).strip()
+          if not re.fullmatch(r'[0-9][0-9A-Za-z.+_-]*', version) or version.endswith('-SNAPSHOT'):
+              raise SystemExit('Use an explicit release version in gradle.properties.')
+          tag = os.environ['RELEASE_TAG']
+          if tag != 'v' + version:
+              raise SystemExit(f'Tag must be v{version}, received {tag!r}.')
+          subprocess.run(['git', 'check-ref-format', 'refs/tags/' + tag], check=True)
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'tag={tag}\nversion={version}\nartifact=squaremap-neoforge-{version}\n')
+          PY
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+      - name: Build selected version
+        env:
+          RUN_TESTS: ${{ inputs.run_tests }}
+        run: |
+          chmod +x gradlew
+          if [[ "$RUN_TESTS" == 'true' ]]; then
+            ./gradlew --no-daemon :squaremap-common:test :squaremap-neoforge:build
+          else
+            ./gradlew --no-daemon :squaremap-neoforge:build -x test
+          fi
+      - name: Prepare production jar and checksum
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          jar="squaremap-neoforge-mc1.21.1-${VERSION}.jar"
+          test -f "build/libs/$jar"
+          cd build/libs
+          sha256sum "$jar" > SHA256SUMS
+      - name: Upload release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.artifact }}
+          path: |
+            build/libs/squaremap-neoforge-mc1.21.1-${{ steps.version.outputs.version }}.jar
+            build/libs/SHA256SUMS
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout the same revision and tags
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Download production artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: release-files
+      - name: Create the manually requested release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          VERSION: ${{ needs.build.outputs.version }}
+          DRAFT: ${{ inputs.draft }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo 'A release already exists for this tag; refusing to overwrite it.' >&2
+            exit 1
+          fi
+          if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            tagged_commit=$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")
+            if [[ "$tagged_commit" != "$GITHUB_SHA" ]]; then
+              echo 'The existing tag points to another commit.' >&2
+              exit 1
+            fi
+          fi
+          flags=()
+          if [[ "$DRAFT" == 'true' ]]; then flags+=(--draft); fi
+          if [[ "$PRERELEASE" == 'true' ]]; then flags+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" \
+            "release-files/squaremap-neoforge-mc1.21.1-${VERSION}.jar" \
+            release-files/SHA256SUMS \
+            --target "$GITHUB_SHA" \
+            --title "squaremap NeoForge 1.21.1 ${VERSION}" \
+            --notes-file RELEASE_NOTES.md \
+            "${flags[@]}"

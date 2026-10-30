@@ -106,3 +106,22 @@ gradlew.bat clean :squaremap-neoforge:build
 This source tree includes an optional Create 6.x web-map integration with tracks, curved rails, stations, signals, occupied sections and live trains. It uses squaremap's existing web server and does not require Create Track Map, Kotlin for Forge, Ktor, Fabric API or a second HTTP port.
 
 See [`CREATE_TRACK_MAP_INTEGRATION.md`](CREATE_TRACK_MAP_INTEGRATION.md) for configuration and endpoint details.
+
+## Backported rendering improvements
+
+This fork includes direct saved-chunk palette decoding, bounded render scheduling, shared snapshots, full/radius render checkpoints, and ordered tile writes. Existing rendering settings and checkpoints are migrated. WebP, tile maintenance, SSE, player avatars, and the Create overlay are retained.
+
+Optional newer blocks are resolved from the registry, including Vanilla Backport blocks; the mod is not required. Existing custom colors are preserved. Web clients use SSE with a `changes.json` fallback and reload only changed tiles. Add `?static=true` to disable automatic live polling and SSE for a static deployment.
+
+See [BACKPORT_PLAN.md](BACKPORT_PLAN.md) for selected features and outstanding validation, and [DIAGNOSIS_1.21.1.md](DIAGNOSIS_1.21.1.md) for the initial spark/log analysis. Java tests can be run with `./gradlew :squaremap-common:test`. Browser checks are in `tools/test-web-map.cjs` (install Playwright under `build/diagnostics`; the script uses Microsoft Edge).
+
+## Manual GitHub releases
+
+Push/PR workflows build artifacts only. Releases are created exclusively through **Actions → Release NeoForge 1.21.1 (manual) → Run workflow** after the workflow has been pushed to GitHub.
+
+1. Set the desired version in `gradle.properties` and update `RELEASE_NOTES.md`, then commit and push.
+2. Select the branch/revision and enter `v` followed by that exact version, for example `v1.3.2-fork.2`.
+3. By default, the workflow skips tests and creates a **draft prerelease**. Enable `run_tests` to run Java regression tests. Disable `draft` only when you want that manual run to publish immediately.
+4. The workflow builds the selected commit, attaches only the production JAR and `SHA256SUMS`, and creates the tag at that commit if absent. An existing tag must point to the same commit; existing releases are never overwritten.
+
+The standard `GITHUB_TOKEN` is used; write permission is limited to the release job. No Modrinth, CurseForge, or Maven publication is performed. Draft releases can be reviewed and published later from GitHub's Releases page. Remaining server/integration validation is recorded in the release notes.
