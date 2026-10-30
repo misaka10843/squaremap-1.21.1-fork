@@ -58,6 +58,7 @@ public class WorldManagerImpl implements WorldManager {
         }
         if (this.configManager.worldConfig(level).MAP_ENABLED) {
             this.worlds.put(identifier, this.factory.create(level));
+            this.worlds.get(identifier).renderScheduler().init();
         }
     }
 

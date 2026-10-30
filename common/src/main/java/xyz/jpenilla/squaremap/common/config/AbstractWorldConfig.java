@@ -101,6 +101,10 @@ public abstract class AbstractWorldConfig<P extends AbstractConfig> {
         return this.parent.get(type, this.wrapPath(path), this.parent.get(type, wrapDefaultPath(path), def));
     }
 
+    protected final org.spongepowered.configurate.ConfigurationNode defaultNode(final String path) {
+        return this.parent.config.node(Config.splitPath(wrapDefaultPath(path)));
+    }
+
     private boolean virtual(String path) {
         return this.parent.config.node(Config.splitPath(path)).virtual();
     }

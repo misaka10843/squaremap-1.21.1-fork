@@ -99,8 +99,7 @@ class LayerControl {
         for (const listener of this.changeListeners) listener([...this.overlayEntries]);
     }
     setupTileLayers(world) {
-        // setup the map tile layers
-        // we need 2 layers to swap between for seamless refreshing
+        // Keep one layer; changed tiles retain their old image until replacements decode.
         if (this.tileLayer1 != null) {
             P.map.removeLayer(this.tileLayer1);
         }
@@ -108,7 +107,7 @@ class LayerControl {
             P.map.removeLayer(this.tileLayer2);
         }
         this.tileLayer1 = this.createTileLayer(world);
-        this.tileLayer2 = this.createTileLayer(world);
+        this.tileLayer2 = null;
 
         // refresh player's control
         this.removeOverlay(this.playersLayer);
@@ -121,36 +120,26 @@ class LayerControl {
         this.playersLayer.setZIndex(world.player_tracker.z_index);
     }
     createTileLayer(world) {
-        return new SquaremapTileLayer(`tiles/${world.name}/{z}/{x}_{y}.${world.tile_format ?? 'png'}`, {
+        return new SquaremapTileLayer({
+            url: `tiles/${world.name}/{z}/{x}_{y}.${world.tile_format ?? 'png'}`,
+            revalidate: !P.staticMode,
+            changes: world.tileChanges,
+            leafletOptions: {
             tileSize: 512,
             minNativeZoom: 0,
             maxNativeZoom: world.zoom.max,
             errorTileUrl: 'images/clear.png'
-        }).addTo(P.map)
-        .addEventListener("load", () => {
-            // when all tiles are loaded, switch to this layer
-            this.switchTileLayer();
-        });
+            }
+        }).addTo(P.map);
     }
     updateTileLayer() {
-        // redraw background tile layer
-        if (this.currentLayer == 1) {
-            this.tileLayer2.redraw();
-        } else {
-            this.tileLayer1.redraw();
-        }
+        this.tileLayer1?._reloadAll();
     }
-    switchTileLayer() {
-        // swap current tile layer
-        if (this.currentLayer == 1) {
-            this.tileLayer1.setZIndex(0);
-            this.tileLayer2.setZIndex(1);
-            this.currentLayer = 2;
-        } else {
-            this.tileLayer1.setZIndex(1);
-            this.tileLayer2.setZIndex(0);
-            this.currentLayer = 1;
-        }
+    applyChanges(changes) {
+        this.tileLayer1?.applyChanges(changes);
+    }
+    invalidateTiles(tiles) {
+        this.tileLayer1?._reloadChanged(tiles.map(tile => [1, tile.z, tile.x, tile.y]), 0);
     }
 }
 

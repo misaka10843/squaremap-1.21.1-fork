@@ -18,4 +18,11 @@ public interface ServerAccess {
     @Nullable ServerPlayer player(UUID uuid);
 
     int maxPlayers();
+
+    // Vanilla 1.21.1 has no empty-server tick sleeping to disable.
+    default void blockSleep() {
+    }
+
+    default void allowSleep() {
+    }
 }

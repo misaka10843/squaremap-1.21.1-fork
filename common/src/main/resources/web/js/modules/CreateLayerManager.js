@@ -30,18 +30,22 @@ class CreateLayerManager {
         this.sseConnected = false;
         this.dynamicSseConnected = false;
         document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') this.checkStatus();
+            if (document.visibilityState === 'visible' && !P.staticMode) {
+                this.checkStatus();
+                P.worldList?.curWorld?.pollChanges();
+            }
         });
         this.checkStatus();
         this.connectEvents();
     }
 
     connectEvents() {
-        if (!window.EventSource || this.eventSource != null) return;
+        if (P.staticMode || !window.EventSource || this.eventSource != null) return;
         const source = new EventSource('api/events?topics=base');
         this.eventSource = source;
         source.addEventListener('ready', () => {
             this.sseConnected = true;
+            P.worldList?.curWorld?.pollChanges();
             this.checkStatus();
             this.syncDynamicEvents();
         });
@@ -61,7 +65,7 @@ class CreateLayerManager {
     }
 
     syncDynamicEvents() {
-        const wanted = this.initialized && this.dynamicLayersVisible();
+        const wanted = !P.staticMode && this.initialized && this.dynamicLayersVisible();
         if (!wanted) {
             if (this.dynamicEventSource != null) this.dynamicEventSource.close();
             this.dynamicEventSource = null;
@@ -107,26 +111,13 @@ class CreateLayerManager {
     }
 
     invalidateVisibleTiles(changed) {
-        const keys = new Set(changed.map(tile => `${tile.z}:${tile.x}:${tile.y}`));
-        let anyVisible = false;
-        for (const layer of [P.layerControl.tileLayer1, P.layerControl.tileLayer2]) {
-            if (layer?._tiles == null) continue;
-            for (const tile of Object.values(layer._tiles)) {
-                const coords = tile.coords;
-                if (coords != null && keys.has(`${coords.z}:${coords.x}:${coords.y}`)) {
-                    anyVisible = true;
-                    break;
-                }
-            }
-            if (anyVisible) break;
-        }
-        if (anyVisible) P.layerControl.updateTileLayer();
+        P.layerControl.invalidateTiles(changed);
     }
 
     tick() {
         this.tickCount++;
         if (document.visibilityState !== 'visible') return;
-        if (!this.sseConnected && (this.tickCount % 5 === 0 || !this.initialized)) {
+        if (!P.staticMode && !this.sseConnected && (this.tickCount % 5 === 0 || !this.initialized)) {
             this.checkStatus();
         }
         if (!this.available || !P.worldList?.curWorld) {
@@ -239,6 +230,7 @@ class CreateLayerManager {
     }
 
     scheduleDynamicRefresh(interval) {
+        if (P.staticMode) return;
         if (this.dynamicTimer != null && this.dynamicInterval === interval) return;
         if (this.dynamicTimer != null) window.clearInterval(this.dynamicTimer);
         this.dynamicInterval = interval;

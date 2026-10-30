@@ -91,7 +91,7 @@ public final class UpdateMarkers implements Runnable {
         if (changed[0] || this.mapWorld.lastReset() != this.lastResetTime) {
             this.lastResetTime = this.mapWorld.lastReset();
             final Path file = this.mapWorld.tilesPath().resolve("markers.json");
-            FileUtil.atomicWriteJsonAsync(file, layers);
+            this.mapWorld.publishWebJson("markers.json", layers);
         }
     }
 

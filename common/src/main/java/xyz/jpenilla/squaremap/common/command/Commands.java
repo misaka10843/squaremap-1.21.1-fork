@@ -29,7 +29,7 @@ import xyz.jpenilla.squaremap.common.command.commands.ResetMapCommand;
 import xyz.jpenilla.squaremap.common.command.commands.TileMaintenanceCommand;
 import xyz.jpenilla.squaremap.common.config.Config;
 import xyz.jpenilla.squaremap.common.config.ConfigManager;
-import xyz.jpenilla.squaremap.common.task.render.RenderFactory;
+import xyz.jpenilla.squaremap.common.render.RenderFactory;
 
 @DefaultQualifier(NonNull.class)
 @Singleton

@@ -14,6 +14,7 @@ ul, li {
 #map {
   width: 100%;
   height: 100vh;
+    height: 100dvh;
   background: black;
 }
 img.leaflet-tile {
@@ -84,6 +85,7 @@ div.leaflet-control-layers.link {
   right: 0;
   width: 0;
   height: 100vh;
+    height: 100dvh;
   padding-left: 10px;
   z-index: 10000;
   font: 12px/1.5 "Helvetica Neue", Arial, Helvetica, sans-serif;

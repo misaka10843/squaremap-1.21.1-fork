@@ -47,4 +47,16 @@ dependencies {
   }
 
   compileOnly("curse.maven:moonrise-1096335:5815098")
+  testImplementation(platform("org.junit:junit-bom:5.11.4"))
+  testImplementation("org.junit.jupiter:junit-jupiter")
+  testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+  testRuntimeOnly("com.twelvemonkeys.imageio:imageio-webp:3.12.0")
+  testRuntimeOnly(platform(libs.adventureBom))
+  testRuntimeOnly(libs.adventureApi)
+  testRuntimeOnly(libs.miniMessage)
+  testRuntimeOnly(libs.adventureTextSerializerPlain)
+}
+
+tasks.test {
+  useJUnitPlatform()
 }

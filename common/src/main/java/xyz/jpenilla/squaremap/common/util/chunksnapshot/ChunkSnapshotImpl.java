@@ -9,32 +9,28 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.LevelHeightAccessor;
 import net.minecraft.world.level.biome.Biome;
-import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.chunk.PalettedContainer;
 import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.level.material.Fluids;
 import org.checkerframework.checker.nullness.qual.NonNull;
+import org.checkerframework.checker.nullness.qual.Nullable;
 import org.checkerframework.framework.qual.DefaultQualifier;
 
 @DefaultQualifier(NonNull.class)
 record ChunkSnapshotImpl(
     LevelHeightAccessor heightAccessor,
-    PalettedContainer<BlockState>[] states,
-    PalettedContainer<Holder<Biome>>[] biomes,
+    SectionData<BlockState>[] states,
+    SectionData<Holder<Biome>>[] biomes,
+    @Nullable Holder<Biome>[] uniformBiomes,
     Map<Heightmap.Types, HeightmapSnapshot> heightmaps,
     boolean[] emptySections,
     DimensionType dimensionType,
     ChunkPos pos
 ) implements ChunkSnapshot {
-    static final PalettedContainer<BlockState> EMPTY_SECTION_BLOCK_STATES = new PalettedContainer<>(
-        Block.BLOCK_STATE_REGISTRY,
-        Blocks.AIR.defaultBlockState(),
-        PalettedContainer.Strategy.SECTION_STATES
-    );
+
     static final EnumMap<Heightmap.Types, HeightmapSnapshot> EMPTY_HEIGHTMAPS = new EnumMap<>(Heightmap.Types.class);
 
     @Override
@@ -47,7 +43,7 @@ record ChunkSnapshotImpl(
         if (sectionIndex < 0 || sectionIndex >= this.states.length || this.sectionEmpty(sectionIndex)) {
             return Blocks.AIR.defaultBlockState();
         }
-        return this.states[sectionIndex].get(x & 15, y & 15, z & 15);
+        return this.states[sectionIndex].get((y & 15) << 8 | (z & 15) << 4 | x & 15);
     }
 
     @Override
@@ -60,7 +56,7 @@ record ChunkSnapshotImpl(
         if (sectionIndex < 0 || sectionIndex >= this.states.length || this.sectionEmpty(sectionIndex)) {
             return Fluids.EMPTY.defaultFluidState();
         }
-        return this.states[sectionIndex].get(x & 15, y & 15, z & 15).getFluidState();
+        return this.states[sectionIndex].get((y & 15) << 8 | (z & 15) << 4 | x & 15).getFluidState();
     }
 
     @Override
@@ -93,6 +89,15 @@ record ChunkSnapshotImpl(
         final int maxQuartY = minQuartY + QuartPos.fromBlock(this.getHeight()) - 1;
         final int clampedQuartY = Mth.clamp(quartY, minQuartY, maxQuartY);
         final int sectionIndex = this.getSectionIndex(QuartPos.toBlock(clampedQuartY));
-        return this.biomes[sectionIndex].get(quartX & 3, clampedQuartY & 3, quartZ & 3);
+        final @Nullable Holder<Biome> uniform = this.uniformBiomes[sectionIndex];
+        if (uniform != null) {
+            return uniform;
+        }
+        return this.biomes[sectionIndex].get((clampedQuartY & 3) << 4 | (quartZ & 3) << 2 | quartX & 3);
+    }
+
+    @Override
+    public @Nullable Holder<Biome> uniformBiome(final int y) {
+        return this.uniformBiomes[this.getSectionIndex(Mth.clamp(y, this.getMinBuildHeight(), this.getMaxBuildHeight() - 1))];
     }
 }

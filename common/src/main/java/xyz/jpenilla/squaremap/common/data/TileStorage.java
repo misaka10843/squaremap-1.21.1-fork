@@ -1,5 +1,6 @@
 package xyz.jpenilla.squaremap.common.data;
 
+import com.luciad.imageio.webp.WebPImageWriterSpi;
 import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.io.BufferedOutputStream;
@@ -32,6 +33,14 @@ public final class TileStorage {
         this.maxZoom = maxZoom;
     }
 
+    public BufferedImage readTile(final int zoom, final int x, final int z) throws IOException {
+        return this.readOrEmpty(zoom, x, z);
+    }
+
+    public void writeTile(final int zoom, final int x, final int z, final BufferedImage image) throws IOException {
+        this.writeOrDelete(zoom, x, z, image);
+    }
+
     public void applyNative(final Image changes) throws IOException {
         final int @Nullable [] pixels = changes.snapshotPixels();
         if (pixels == null) {
@@ -48,7 +57,7 @@ public final class TileStorage {
         this.writeOrDelete(this.maxZoom, region.x(), region.z(), image);
     }
 
-    /** Rebuild one parent from its four children using the original nearest-pixel sampling. */
+    /** Rebuild one parent from its four children in linear light. */
     public void rebuildParent(final int zoom, final int x, final int z) throws IOException {
         if (zoom < 0 || zoom >= this.maxZoom) {
             return;
@@ -63,11 +72,7 @@ public final class TileStorage {
                 }
                 final int baseX = childX * 256;
                 final int baseZ = childZ * 256;
-                for (int dz = 0; dz < 256; dz++) {
-                    for (int dx = 0; dx < 256; dx++) {
-                        parent.setRGB(baseX + dx, baseZ + dz, child.getRGB(dx * 2, dz * 2));
-                    }
-                }
+                ZoomDownsampler.downsample(child, parent, baseX, baseZ);
             }
         }
         this.writeOrDelete(zoom, x, z, parent);
@@ -84,6 +89,9 @@ public final class TileStorage {
             for (final Iterator<Path> it = files.filter(Files::isRegularFile).iterator(); it.hasNext();) {
                 final Path file = it.next();
                 final String name = file.getFileName().toString();
+                if (name.contains(".unreadable-")) {
+                    continue;
+                }
                 final Path parent = file.getParent();
                 try {
                     if (parent != null && parent.getParent() != null
@@ -118,7 +126,7 @@ public final class TileStorage {
                 }
                 final @Nullable BufferedImage image;
                 try {
-                    image = ImageIO.read(file.toFile());
+                    image = TileImageIO.read(file);
                 } catch (final IOException decodeFailure) {
                     Logging.logger().warn("Skipping unreadable tile during maintenance: {}", file, decodeFailure);
                     continue;
@@ -150,19 +158,22 @@ public final class TileStorage {
 
     private @Nullable BufferedImage read(final int zoom, final int x, final int z) throws IOException {
         final Path primary = this.path(zoom, x, z, Config.TILE_FORMAT);
-        Path source = primary;
-        if (!Files.isRegularFile(source)) {
-            source = this.path(zoom, x, z, Config.TILE_FORMAT.equals("png") ? "webp" : "png");
+        final Path alternate = this.path(zoom, x, z, Config.TILE_FORMAT.equals("png") ? "webp" : "png");
+        for (final Path source : new Path[] {primary, alternate}) {
+            if (!Files.isRegularFile(source)) {
+                continue;
+            }
+            try {
+                return TileImageIO.read(source);
+            } catch (final IOException decodeFailure) {
+                // Preserve the original for diagnosis. A PNG copy can still recover this tile.
+                final Path backup = source.resolveSibling(source.getFileName() + ".unreadable-" + java.util.UUID.randomUUID());
+                Files.move(source, backup);
+                Logging.logger().warn("Could not read map tile '{}'; preserved as '{}'. Trying the alternate format; "
+                    + "if absent, this tile needs a render to restore unchanged areas", source, backup, decodeFailure);
+            }
         }
-        if (!Files.isRegularFile(source)) {
-            return null;
-        }
-        final @Nullable BufferedImage result = ImageIO.read(source.toFile());
-        if (result == null) {
-            Logging.logger().warn("Could not decode map tile '{}'; replacing it", source);
-            Files.deleteIfExists(source);
-        }
-        return result;
+        return null;
     }
 
     private void writeOrDelete(final int zoom, final int x, final int z, final BufferedImage image) throws IOException {
@@ -191,10 +202,11 @@ public final class TileStorage {
         FileUtil.atomicWrite(out, tmp -> {
             try (OutputStream stream = new BufferedOutputStream(Files.newOutputStream(tmp))) {
                 final Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName(format);
-                if (!writers.hasNext()) {
+                if (!format.equals("webp") && !writers.hasNext()) {
                     throw new IOException("No ImageIO writer is installed for tile format '" + format + "'");
                 }
-                final ImageWriter writer = writers.next();
+                final ImageWriter writer = format.equals("webp")
+                    ? new WebPImageWriterSpi().createWriterInstance() : writers.next();
                 try (ImageOutputStream imageOut = ImageIO.createImageOutputStream(stream)) {
                     writer.setOutput(imageOut);
                     final ImageWriteParam param = writer.getDefaultWriteParam();

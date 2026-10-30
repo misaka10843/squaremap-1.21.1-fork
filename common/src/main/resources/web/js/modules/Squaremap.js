@@ -9,6 +9,7 @@ import { CreateLayerManager } from "./CreateLayerManager.js?v=performance-sse-we
 
 class SquaremapMap {
     constructor() {
+        this.staticMode = this.getUrlParam('static', 'false') === 'true';
         this.map = L.map("map", {
             crs: L.CRS.Simple,
             center: [0, 0],
@@ -114,13 +115,20 @@ class SquaremapMap {
         element.appendChild(document.createTextNode(text));
         return element;
     }
-    getJSON(url, fn) {
-        fetch(url, {cache: "no-cache"})
-            .then(async res => {
-                if (res.ok) {
-                    fn(await res.json());
-                }
-            });
+    async getJSON(url, fn) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 10000);
+        try {
+            const response = await fetch(url, {cache: 'no-cache', signal: controller.signal});
+            if (!response.ok) return null;
+            const json = await response.json();
+            if (fn != null) await fn(json);
+            return json;
+        } catch {
+            return null;
+        } finally {
+            clearTimeout(timer);
+        }
     }
     getUrlParam(query, def) {
         const url = window.location.search.substring(1);
@@ -153,6 +161,7 @@ class SquaremapMap {
         if (!this.sidebar.showSidebar) {
             link += "&show_sidebar=false"
         }
+        if (this.staticMode) link += '&static=true';
         return link
     }
     updateBrowserUrl(url) {

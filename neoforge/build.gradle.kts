@@ -88,9 +88,11 @@ dependencies {
 }
 
 tasks.shadowJar {
+  mergeServiceFiles()
   // Cloud uses generated builders and several indirect code paths. Keep the
   // complete shaded Cloud stack instead of letting Shadow minimize it away.
   minimize {
+    exclude(dependency("org.sejda.imageio:.*:.*"))
     exclude(dependency("org.incendo:.*:.*"))
     exclude(dependency("io.leangen.geantyref:.*:.*"))
   }

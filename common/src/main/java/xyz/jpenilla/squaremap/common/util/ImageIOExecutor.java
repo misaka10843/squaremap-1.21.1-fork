@@ -50,21 +50,32 @@ public final class ImageIOExecutor {
         }
         while (true) {
             synchronized (this.pending) {
+                if (this.closed) {
+                    return;
+                }
                 final Image existing = this.pending.get(image.region());
                 if (existing != null) {
                     existing.merge(image);
+                    this.scheduleWorker();
                     break;
                 }
             }
             try {
-                this.pendingSlots.acquire();
+                if (!this.pendingSlots.tryAcquire(100, TimeUnit.MILLISECONDS)) {
+                    continue;
+                }
             } catch (final InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 return;
             }
             synchronized (this.pending) {
+                if (this.closed) {
+                    this.pendingSlots.release();
+                    return;
+                }
                 final Image existing = this.pending.putIfAbsent(image.region(), image);
                 if (existing == null) {
+                    this.scheduleWorker();
                     break;
                 }
                 existing.merge(image);
@@ -72,7 +83,6 @@ public final class ImageIOExecutor {
                 break;
             }
         }
-        this.scheduleWorker();
     }
 
     private void scheduleWorker() {
@@ -118,9 +128,11 @@ public final class ImageIOExecutor {
                 this.publishInvalidations(changedTiles);
             }
         } finally {
-            this.workerScheduled.set(false);
-            if (!this.closed && !this.pending.isEmpty()) {
-                this.scheduleWorker();
+            synchronized (this.pending) {
+                this.workerScheduled.set(false);
+                if (!this.closed && !this.pending.isEmpty()) {
+                    this.scheduleWorker();
+                }
             }
         }
     }
@@ -159,20 +171,27 @@ public final class ImageIOExecutor {
     }
 
     public void shutdown() {
-        this.closed = true;
+        synchronized (this.pending) {
+            this.closed = true;
+        }
         Util.shutdownExecutor(this.executor, TimeUnit.SECONDS, 30L);
     }
 
     public CompletableFuture<TileStorage.Stats> compact(final boolean migrate) {
-        this.scheduleWorker();
         final CompletableFuture<TileStorage.Stats> result = new CompletableFuture<>();
-        this.executor.execute(() -> {
-            try {
-                result.complete(this.storage.compact(migrate));
-            } catch (final Throwable throwable) {
-                result.completeExceptionally(throwable);
+        synchronized (this.pending) {
+            if (this.closed) {
+                return CompletableFuture.failedFuture(new IllegalStateException("Tile writer is closed"));
             }
-        });
+            this.scheduleWorker();
+            this.executor.execute(() -> {
+                try {
+                    result.complete(this.storage.compact(migrate));
+                } catch (final Throwable throwable) {
+                    result.completeExceptionally(throwable);
+                }
+            });
+        }
         return result;
     }
 

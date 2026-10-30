@@ -59,6 +59,9 @@ public final class IntegratedServer {
                     return;
                 }
 
+                if (exchange.getRequestHeaders().contains(Headers.IF_NONE_MATCH)) {
+                    exchange.getRequestHeaders().remove(Headers.IF_MODIFIED_SINCE);
+                }
                 resourceHandler.handleRequest(exchange);
             })
             .build();
@@ -75,8 +78,8 @@ public final class IntegratedServer {
                     Logging.logger().warn("Failed to read file attributes for {}", path, e);
                     return null;
                 }
-                long time = attr.lastModifiedTime().toMillis();
-                return new ETag(false, Long.toString(time));
+                final long time = attr.lastModifiedTime().to(java.util.concurrent.TimeUnit.NANOSECONDS);
+                return new ETag(false, Long.toString(time, 36) + '-' + Long.toString(attr.size(), 36));
             })
             .build();
 
@@ -86,12 +89,14 @@ public final class IntegratedServer {
                 final String url = exchange.getRelativePath();
                 if (url.startsWith("/tiles") && (url.endsWith(".png") || url.endsWith(".webp"))) {
                     exchange.setStatusCode(200);
+                    exchange.endExchange();
                     return;
                 }
                 exchange.setStatusCode(404);
                 if (UndertowLogger.PREDICATE_LOGGER.isDebugEnabled()) {
                     UndertowLogger.PREDICATE_LOGGER.debugf("Response code set to [%s] for %s.", 404, exchange);
                 }
+                exchange.endExchange();
             }
         );
     }

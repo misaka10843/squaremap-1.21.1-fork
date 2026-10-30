@@ -2,6 +2,7 @@ package xyz.jpenilla.squaremap.common.config;
 
 import io.leangen.geantyref.TypeToken;
 import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.spongepowered.configurate.ConfigurationNode;
@@ -9,10 +10,11 @@ import org.spongepowered.configurate.NodePath;
 import org.spongepowered.configurate.transformation.ConfigurationTransformation;
 import xyz.jpenilla.squaremap.common.data.DirectoryProvider;
 import xyz.jpenilla.squaremap.common.util.ReflectionUtil;
+import xyz.jpenilla.squaremap.common.util.BackportBlocks;
 
 @SuppressWarnings("unused")
 public final class Advanced extends AbstractConfig {
-    private static final int LATEST_VERSION = 3;
+    private static final int LATEST_VERSION = 4;
 
     Advanced(final DirectoryProvider directoryProvider) {
         super(directoryProvider.dataDirectory(), Advanced.class, "advanced.yml", LATEST_VERSION);
@@ -52,7 +54,27 @@ public final class Advanced extends AbstractConfig {
             .build();
 
         versionedBuilder.addVersion(2, oneToTwo);
-        versionedBuilder.addVersion(LATEST_VERSION, twoToThree);
+        versionedBuilder.addVersion(3, twoToThree);
+        versionedBuilder.addVersion(4, ConfigurationTransformation.builder()
+            .addAction(NodePath.path("world-settings"), Transformations.eachMapChild(Advanced::addBackportDefaults)).build());
+    }
+
+    static void addBackportDefaults(final ConfigurationNode world) throws org.spongepowered.configurate.serialize.SerializationException {
+        final ConfigurationNode blocks = world.node("color-overrides", "blocks");
+        if (!blocks.virtual()) {
+            final TypeToken<Map<String, String>> type = new TypeToken<>() {};
+            final Map<String, String> colors = new HashMap<>(blocks.get(type, Map.of()));
+            BackportBlocks.COLORS.forEach(colors::putIfAbsent);
+            blocks.set(type, colors);
+        }
+        final ConfigurationNode hidden = world.node("invisible-blocks");
+        if (!hidden.virtual()) {
+            final List<String> names = new ArrayList<>(hidden.getList(String.class, List.of()));
+            if (names.contains("minecraft:short_grass") || names.contains("short_grass")) {
+                for (final String name : BackportBlocks.GRASS_LIKE) if (!names.contains(name)) names.add(name);
+                hidden.setList(String.class, names);
+            }
+        }
     }
 
     static Advanced config;

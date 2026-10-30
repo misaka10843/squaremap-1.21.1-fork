@@ -17,7 +17,6 @@ public final class WorldConfig extends AbstractWorldConfig<Config> {
     public String MAP_DISPLAY_NAME = "{world}";
     public int MAP_ORDER = 0;
     public String MAP_ICON = "";
-    public int MAX_RENDER_THREADS = -1;
     public boolean MAP_ITERATE_UP = false;
     public int MAP_MAX_HEIGHT = -1;
 
@@ -26,7 +25,6 @@ public final class WorldConfig extends AbstractWorldConfig<Config> {
         this.MAP_DISPLAY_NAME = this.getString("map.display-name", this.MAP_DISPLAY_NAME);
         this.MAP_ORDER = this.getInt("map.order", this.MAP_ORDER);
         this.MAP_ICON = this.getString("map.icon", this.MAP_ICON);
-        this.MAX_RENDER_THREADS = this.getInt("map.max-render-threads", this.MAX_RENDER_THREADS);
         this.MAP_ITERATE_UP = this.getBoolean("map.iterate-up", this.MAP_ITERATE_UP);
         this.MAP_MAX_HEIGHT = this.getInt("map.max-height", this.MAP_MAX_HEIGHT);
     }
@@ -69,16 +67,16 @@ public final class WorldConfig extends AbstractWorldConfig<Config> {
         this.ZOOM_EXTRA = this.getInt("map.zoom.extra", this.ZOOM_EXTRA);
     }
 
-    public boolean BACKGROUND_RENDER_ENABLED = true;
-    public int BACKGROUND_RENDER_MAX_CHUNKS_PER_INTERVAL = 1024;
-    public int BACKGROUND_RENDER_INTERVAL_SECONDS = 15;
-    public int BACKGROUND_RENDER_MAX_THREADS = -1;
+    public RenderConfig FULL_RENDER;
+    public RenderConfig RADIUS_RENDER;
+    public BackgroundRenderConfig BACKGROUND_RENDER;
+    public ImageSavingConfig IMAGE_SAVING;
 
-    private void backgroundRenderSettings() {
-        this.BACKGROUND_RENDER_ENABLED = this.getBoolean("map.background-render.enabled", this.BACKGROUND_RENDER_ENABLED);
-        this.BACKGROUND_RENDER_MAX_CHUNKS_PER_INTERVAL = this.getInt("map.background-render.max-chunks-per-interval", this.BACKGROUND_RENDER_MAX_CHUNKS_PER_INTERVAL);
-        this.BACKGROUND_RENDER_INTERVAL_SECONDS = this.getInt("map.background-render.interval-seconds", this.BACKGROUND_RENDER_INTERVAL_SECONDS);
-        this.BACKGROUND_RENDER_MAX_THREADS = this.getInt("map.background-render.max-render-threads", this.BACKGROUND_RENDER_MAX_THREADS);
+    private void renderSettings() {
+        this.FULL_RENDER = new RenderConfig(this, "map.render.full");
+        this.RADIUS_RENDER = new RenderConfig(this, "map.render.radius");
+        this.BACKGROUND_RENDER = new BackgroundRenderConfig(this);
+        this.IMAGE_SAVING = new ImageSavingConfig(this);
     }
 
     public boolean PLAYER_TRACKER_ENABLED = true;
@@ -147,9 +145,15 @@ public final class WorldConfig extends AbstractWorldConfig<Config> {
         this.WORLDBORDER_MARKER_Z_INDEX = this.getInt("map.markers.world-border.z-index", this.WORLDBORDER_MARKER_Z_INDEX);
     }
 
-    public List<VisibilityShape> VISIBILITY_LIMITS = List.of(new WorldBorderShape());
+    public List<VisibilityShape> VISIBILITY_LIMITS = List.of();
 
-    private void visibilityLimitSettings() {
+    private void visibilityLimitSettings() throws org.spongepowered.configurate.serialize.SerializationException {
+        final var defaults = this.defaultNode("map.visibility-limits");
+        if (defaults.virtual()) {
+            final var example = defaults.appendListNode();
+            example.node("type").set("world-border");
+            example.node("enabled").set(false);
+        }
         this.VISIBILITY_LIMITS = this.getList(VisibilityShape.class, "map.visibility-limits", this.VISIBILITY_LIMITS);
     }
 }

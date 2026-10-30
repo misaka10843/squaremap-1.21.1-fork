@@ -23,20 +23,30 @@ import xyz.jpenilla.squaremap.common.data.DirectoryProvider;
 import xyz.jpenilla.squaremap.common.data.MapWorldInternal;
 import xyz.jpenilla.squaremap.common.util.FileUtil;
 import xyz.jpenilla.squaremap.common.util.Util;
+import xyz.jpenilla.squaremap.common.util.Json;
+import xyz.jpenilla.squaremap.common.util.CheckedRunnable;
+import xyz.jpenilla.squaremap.common.util.concurrent.GlobalBackgroundExecutor;
+import xyz.jpenilla.squaremap.common.httpd.JsonCache;
 
 @DefaultQualifier(NonNull.class)
 public final class UpdateWorldData implements Runnable {
     private final WorldManager worldManager;
     private final DirectoryProvider directoryProvider;
+    private final GlobalBackgroundExecutor backgroundExecutor;
+    private final JsonCache jsonCache;
     private @MonotonicNonNull Map<WorldIdentifier, ChangingData> lastUpdate = null;
 
     @Inject
     private UpdateWorldData(
         final WorldManager worldManager,
-        final DirectoryProvider directoryProvider
+        final DirectoryProvider directoryProvider,
+        final GlobalBackgroundExecutor backgroundExecutor,
+        final JsonCache jsonCache
     ) {
         this.worldManager = worldManager;
         this.directoryProvider = directoryProvider;
+        this.backgroundExecutor = backgroundExecutor;
+        this.jsonCache = jsonCache;
     }
 
     @Override
@@ -97,7 +107,7 @@ public final class UpdateWorldData implements Runnable {
         map.put("worlds", worlds);
         map.put("ui", ui);
 
-        FileUtil.atomicWriteJsonAsync(this.directoryProvider.tilesDirectory().resolve("settings.json"), map);
+        this.backgroundExecutor.execute(() -> this.jsonCache.put(this.directoryProvider.tilesDirectory().resolve("settings.json"), Util.gson().toJson(map)));
     }
 
     private void writeWorldSettings(
@@ -137,10 +147,10 @@ public final class UpdateWorldData implements Runnable {
         settings.put("player_tracker", playerTracker);
         settings.put("zoom", zoom);
         settings.put("marker_update_interval", worldConfig.MARKER_API_UPDATE_INTERVAL_SECONDS);
-        settings.put("tiles_update_interval", worldConfig.BACKGROUND_RENDER_INTERVAL_SECONDS);
+        settings.put("tiles_update_interval", worldConfig.BACKGROUND_RENDER.intervalSeconds);
         settings.put("tile_format", Config.TILE_FORMAT);
 
-        FileUtil.atomicWriteJsonAsync(mapWorld.tilesPath().resolve("settings.json"), settings);
+        mapWorld.publishWebJson("settings.json", settings);
     }
 
     // replicate bukkit "environment"

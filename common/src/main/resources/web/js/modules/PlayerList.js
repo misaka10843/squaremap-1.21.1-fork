@@ -11,6 +11,10 @@ class PlayerList {
         P.map.createPane("nameplate").style.zIndex = 1000;
     }
     tick() {
+        if (P.staticMode) {
+            if (this.staticRequested) return;
+            this.staticRequested = true;
+        }
         if (P.tick_count % P.worldList.curWorld.player_tracker.update_interval == 0) {
             P.getJSON("tiles/players.json", (json) => {
                 this.updatePlayerList(json.players);
@@ -25,13 +29,16 @@ class PlayerList {
     }
     showPlayer(uuid) {
         const player = this.players.get(uuid);
-        if (!P.worldList.worlds.has(player.world)) {
+        if (player == null || !P.worldList.worlds.has(player.world)) {
             return false;
         }
-        P.worldList.showWorld(player.world, () => {
-            P.map.panTo(P.toLatLng(player.x, player.z));
-        });
+        P.worldList.showWorld(player.world, () => this.panToPlayer(player));
         return true;
+    }
+    panToPlayer(player) {
+        if (P.worldList.curWorld?.name === player.world && Number.isFinite(player.x) && Number.isFinite(player.z)) {
+            P.map.panTo(P.toLatLng(player.x, player.z));
+        }
     }
     addToList(player) {
         const head = document.createElement("img");
@@ -62,6 +69,9 @@ class PlayerList {
         const link = document.getElementById(player.uuid);
         if (link != null) {
             link.remove();
+        }
+        if (this.following === player.uuid) {
+            this.followPlayerMarker(null);
         }
         this.players.delete(player.uuid);
         player.removeMarker();
@@ -122,13 +132,11 @@ class PlayerList {
         // follow highlighted player
         if (this.following != null) {
             const player = this.players.get(this.following);
-            if (player != null && P.worldList.curWorld != null) {
+            if (player != null && P.worldList.curWorld != null && P.worldList.worlds.has(player.world)) {
                 if (player.world !== P.worldList.curWorld.name) {
-                    P.worldList.showWorld(player.world, () => {
-                        P.map.panTo(P.toLatLng(player.x, player.z));
-                    });
+                    P.worldList.showWorld(player.world, () => this.panToPlayer(player));
                 } else {
-                    P.map.panTo(P.toLatLng(player.x, player.z));
+                    this.panToPlayer(player);
                 }
             }
         }
@@ -144,12 +152,12 @@ class PlayerList {
     }
     followPlayerMarker(uuid) {
         if (this.following != null) {
-            document.getElementById(this.following).classList.remove("following");
+            document.getElementById(this.following)?.classList.remove("following");
             this.following = null;
         }
         if (uuid != null) {
             this.following = uuid;
-            document.getElementById(this.following).classList.add("following");
+            document.getElementById(this.following)?.classList.add("following");
         }
     }
 }

@@ -12,19 +12,43 @@ class World {
         this.player_tracker = {};
         this.marker_update_interval = 5;
         this.tiles_update_interval = 15;
+        this.tileChanges = null;
+        this.changePollInFlight = false;
+        this.changeLogAvailable = false;
+        this.lastChangePoll = 0;
+        this.staticMarkersRequested = false;
     }
     tick() {
-        // refresh map tile layer
-        if (!P.createLayerManager?.sseConnected && P.tick_count % this.tiles_update_interval == 0) {
-            P.layerControl.updateTileLayer();
+        if (!P.staticMode) {
+            const interval = P.createLayerManager?.sseConnected ? 30000 : 1000;
+            if (Date.now() - this.lastChangePoll >= interval) this.pollChanges();
+            if (!this.changeLogAvailable && !P.createLayerManager?.sseConnected && P.tick_count % this.tiles_update_interval === 0) {
+                P.layerControl.updateTileLayer();
+            }
         }
         // load and draw markers
-        if (P.tick_count % this.marker_update_interval == 0) {
+        if ((!P.staticMode && P.tick_count % this.marker_update_interval === 0) || (P.staticMode && !this.staticMarkersRequested)) {
+            this.staticMarkersRequested = true;
             P.getJSON(`tiles/${this.name}/markers.json`, (json) => {
                 if (this === P.worldList.curWorld) {
                     this.markers(json);
                 }
             });
+        }
+    }
+    async pollChanges() {
+        if (P.staticMode || this.changePollInFlight) return;
+        this.changePollInFlight = true;
+        this.lastChangePoll = Date.now();
+        try {
+            const changes = await P.getJSON(`tiles/${this.name}/changes.json`);
+            if (changes != null && P.worldList.curWorld === this) {
+                this.tileChanges = changes;
+                this.changeLogAvailable = true;
+                P.layerControl.applyChanges(changes);
+            }
+        } finally {
+            this.changePollInFlight = false;
         }
     }
     unload() {
@@ -39,7 +63,13 @@ class World {
         }
     }
     load(callback) {
-        P.getJSON(`tiles/${this.name}/settings.json`, (json) => {
+        this.staticMarkersRequested = false;
+        P.getJSON(`tiles/${this.name}/settings.json`, async (json) => {
+            const changes = P.staticMode ? null : await P.getJSON(`tiles/${this.name}/changes.json`);
+            if (P.worldList.curWorld !== this) return;
+            this.tileChanges = changes;
+            this.changeLogAvailable = changes != null;
+            this.lastChangePoll = Date.now();
             this.player_tracker = json.player_tracker;
             this.zoom = json.zoom;
             this.spawn = json.spawn;

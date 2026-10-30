@@ -6,7 +6,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ForkJoinPool;
 import net.kyori.adventure.text.flattener.ComponentFlattener;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
@@ -25,6 +24,7 @@ import xyz.jpenilla.squaremap.common.config.WorldConfig;
 import xyz.jpenilla.squaremap.common.httpd.JsonCache;
 import xyz.jpenilla.squaremap.common.player.PlayerHeadCache;
 import xyz.jpenilla.squaremap.common.util.Util;
+import xyz.jpenilla.squaremap.common.util.concurrent.GlobalBackgroundExecutor;
 
 @DefaultQualifier(NonNull.class)
 public final class UpdatePlayers implements Runnable {
@@ -36,6 +36,7 @@ public final class UpdatePlayers implements Runnable {
     private final ConfigManager configManager;
     private final JsonCache jsonCache;
     private final PlayerHeadCache playerHeadCache;
+    private final GlobalBackgroundExecutor backgroundExecutor;
     private @Nullable Map<String, Object> lastData = null;
 
     @Inject
@@ -45,7 +46,8 @@ public final class UpdatePlayers implements Runnable {
         final ServerAccess serverAccess,
         final ConfigManager configManager,
         final JsonCache jsonCache,
-        final PlayerHeadCache playerHeadCache
+        final PlayerHeadCache playerHeadCache,
+        final GlobalBackgroundExecutor backgroundExecutor
     ) {
         this.flattener = flattener;
         this.playerManager = playerManager;
@@ -53,6 +55,7 @@ public final class UpdatePlayers implements Runnable {
         this.configManager = configManager;
         this.jsonCache = jsonCache;
         this.playerHeadCache = playerHeadCache;
+        this.backgroundExecutor = backgroundExecutor;
     }
 
     @Override
@@ -61,7 +64,7 @@ public final class UpdatePlayers implements Runnable {
         final Map<String, Object> data = this.collectData();
         this.lastData = data;
 
-        ForkJoinPool.commonPool().execute(() -> {
+        this.backgroundExecutor.execute(() -> {
             if (prev == null || !prev.equals(data)) {
                 final String json = Util.gson().toJson(data);
                 this.jsonCache.put(JSON_PATH, json);

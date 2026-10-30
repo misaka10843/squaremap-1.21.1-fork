@@ -8,7 +8,7 @@ import xyz.jpenilla.squaremap.common.data.DirectoryProvider;
 
 @SuppressWarnings("unused")
 public final class Config extends AbstractConfig {
-    private static final int LATEST_VERSION = 2;
+    private static final int LATEST_VERSION = 3;
 
     Config(final DirectoryProvider directoryProvider) {
         super(directoryProvider.dataDirectory(), Config.class, "config.yml", LATEST_VERSION);
@@ -26,7 +26,31 @@ public final class Config extends AbstractConfig {
             })
             .build();
 
-        versionedBuilder.addVersion(LATEST_VERSION, oneToTwo);
+        versionedBuilder.addVersion(2, oneToTwo);
+        versionedBuilder.addVersion(3, ConfigurationTransformation.builder()
+            .addAction(NodePath.path("world-settings"), Transformations.eachMapChild(world -> {
+                final var map = world.node("map");
+                final var workers = map.node("max-render-threads");
+                if (!workers.virtual()) {
+                    final Object value = workers.getInt() == -1 ? "default" : workers.raw();
+                    for (final String mode : List.of("full", "radius")) {
+                        final var target = map.node("render", mode, "workers");
+                        if (target.virtual()) target.raw(value);
+                    }
+                    workers.raw(null);
+                }
+                final var background = map.node("background-render");
+                for (final String key : List.of("enabled", "interval-seconds", "max-chunks-per-interval", "max-render-threads")) {
+                    final var old = background.node(key);
+                    if (old.virtual()) continue;
+                    final var target = map.node("render", "background", key.equals("max-render-threads") ? "workers" : key);
+                    Object value = old.raw();
+                    if (key.equals("max-render-threads") && old.getInt() == -1) value = "default";
+                    if (target.virtual()) target.raw(value);
+                    old.raw(null);
+                }
+                if (background.childrenMap().isEmpty()) background.raw(null);
+            })).build());
     }
 
     static Config config;

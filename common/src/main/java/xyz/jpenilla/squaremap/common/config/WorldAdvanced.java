@@ -16,6 +16,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import xyz.jpenilla.squaremap.common.util.Colors;
 import xyz.jpenilla.squaremap.common.util.Util;
+import xyz.jpenilla.squaremap.common.util.BackportBlocks;
 
 @SuppressWarnings("unused")
 public final class WorldAdvanced extends AbstractWorldConfig<Advanced> {
@@ -34,9 +35,12 @@ public final class WorldAdvanced extends AbstractWorldConfig<Advanced> {
                 "minecraft:tall_grass",
                 "minecraft:fern",
                 "minecraft:short_grass",
-                "minecraft:large_fern"
+                "minecraft:large_fern",
+                "minecraft:bush",
+                "minecraft:short_dry_grass",
+                "minecraft:tall_dry_grass"
             )
-        ).forEach(block -> this.invisibleBlocks.add(Util.requireEntry(BuiltInRegistries.BLOCK, ResourceLocation.parse(block))));
+        ).forEach(block -> this.invisibleBlocks.addAll(BackportBlocks.resolve(block)));
     }
 
     public final Set<Block> iterateUpBaseBlocks = new HashSet<>();
@@ -85,6 +89,15 @@ public final class WorldAdvanced extends AbstractWorldConfig<Advanced> {
     }
 
     public final Reference2IntMap<Biome> COLOR_OVERRIDES_BIOME_GRASS = new Reference2IntOpenHashMap<>();
+
+    public final Reference2IntMap<Biome> COLOR_OVERRIDES_BIOME_DRY_FOLIAGE = new Reference2IntOpenHashMap<>();
+
+    private void colorOverrideBiomeDryFoliageSettings() {
+        this.COLOR_OVERRIDES_BIOME_DRY_FOLIAGE.clear();
+        this.get(new TypeToken<Map<String, String>>() {}, "color-overrides.biomes.dry-foliage", Map.of())
+            .forEach((key, color) -> this.COLOR_OVERRIDES_BIOME_DRY_FOLIAGE.put(
+                Util.requireEntry(Util.biomeRegistry(this.world), ResourceLocation.parse(key)), Colors.parseHex(color)));
+    }
 
     private void colorOverrideBiomeGrassSettings() {
         final Registry<Biome> registry = Util.biomeRegistry(this.world);
@@ -151,11 +164,18 @@ public final class WorldAdvanced extends AbstractWorldConfig<Advanced> {
                 Map.entry("minecraft:spruce_leaves", "#619961"),
                 Map.entry("minecraft:birch_leaves", "#80A755"),
                 Map.entry("minecraft:lava", "#EA5C0F"),
-                Map.entry("minecraft:glass", "#FFFFFF")
+                Map.entry("minecraft:glass", "#FFFFFF"),
+                Map.entry("minecraft:pale_oak_leaves", "#626760"),
+                Map.entry("minecraft:wildflowers", "#EDD575"),
+                Map.entry("minecraft:golden_dandelion", "#DBA213"),
+                Map.entry("minecraft:torchflower", "#F6B927"),
+                Map.entry("minecraft:pitcher_plant", "#6F6CCC"),
+                Map.entry("minecraft:short_dry_grass", "#BA9C68"),
+                Map.entry("minecraft:tall_dry_grass", "#BA9C68")
             )
         ).forEach((key, color) -> {
-            final Block block = Util.requireEntry(BuiltInRegistries.BLOCK, ResourceLocation.parse(key));
-            if (block != Blocks.AIR) {
+            for (final Block block : BackportBlocks.resolve(key)) {
+                if (block == Blocks.AIR) continue;
                 this.COLOR_OVERRIDES_BLOCKS.put(block, Colors.parseHex(color));
             }
         });

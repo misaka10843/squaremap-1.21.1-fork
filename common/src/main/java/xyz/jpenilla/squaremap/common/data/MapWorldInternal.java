@@ -29,12 +29,22 @@ import xyz.jpenilla.squaremap.common.config.WorldAdvanced;
 import xyz.jpenilla.squaremap.common.config.WorldConfig;
 import xyz.jpenilla.squaremap.common.layer.SpawnIconLayer;
 import xyz.jpenilla.squaremap.common.layer.WorldBorderLayer;
-import xyz.jpenilla.squaremap.common.task.render.RenderFactory;
+import xyz.jpenilla.squaremap.common.render.RenderFactory;
+import xyz.jpenilla.squaremap.common.render.RenderScheduler;
+import xyz.jpenilla.squaremap.common.render.output.RegionImage;
+import xyz.jpenilla.squaremap.common.render.output.RegionImageSaveQueue;
+import xyz.jpenilla.squaremap.common.render.scanning.BiomeColorTables;
+import xyz.jpenilla.squaremap.common.util.concurrent.BackgroundExecutor;
+import xyz.jpenilla.squaremap.common.util.concurrent.Threads;
+import xyz.jpenilla.squaremap.common.world.SnapshotRequests;
 import xyz.jpenilla.squaremap.common.util.Colors;
 import xyz.jpenilla.squaremap.common.util.FileUtil;
 import xyz.jpenilla.squaremap.common.util.ImageIOExecutor;
 import xyz.jpenilla.squaremap.common.util.Util;
 import xyz.jpenilla.squaremap.common.httpd.EventStream;
+import xyz.jpenilla.squaremap.common.httpd.JsonCache;
+import xyz.jpenilla.squaremap.common.web.TileChangeLog;
+import xyz.jpenilla.squaremap.common.coordinate.TileCoordinate;
 import xyz.jpenilla.squaremap.common.visibilitylimit.VisibilityLimitImpl;
 
 @DefaultQualifier(NonNull.class)
@@ -47,12 +57,17 @@ public abstract class MapWorldInternal implements MapWorld {
     private final WorldAdvanced advancedWorldConfig;
     private final Path dataPath;
     private final Path tilesPath;
-    private final ImageIOExecutor imageIOExecutor;
+    private final RegionImageSaveQueue imageSaveQueue;
+    private final BackgroundExecutor backgroundExecutor;
+    private final JsonCache jsonCache;
+    private final TileChangeLog tileChangeLog;
+    private final Set<TileCoordinate> pendingTileEvents = ConcurrentHashMap.newKeySet();
+    private final SnapshotRequests snapshotRequests = new SnapshotRequests(1);
     private final TileStorage tileStorage;
-    private final RenderManager renderManager;
+    private final RenderScheduler renderScheduler;
     private final Set<ChunkCoordinate> modifiedChunks = ConcurrentHashMap.newKeySet();
-    private final BlockColors blockColors;
-    private final LevelBiomeColorData levelBiomeColorData;
+    private final xyz.jpenilla.squaremap.common.render.scanning.BlockColors blockColors;
+    private final BiomeColorTables biomeColorTables;
     private final VisibilityLimitImpl visibilityLimit;
     private volatile long lastReset = -1;
 
@@ -61,20 +76,28 @@ public abstract class MapWorldInternal implements MapWorld {
         final RenderFactory renderFactory,
         final DirectoryProvider directoryProvider,
         final ConfigManager configManager,
-        final EventStream eventStream
+        final EventStream eventStream,
+        final JsonCache jsonCache
     ) {
         this.level = level;
+        this.jsonCache = jsonCache;
 
         this.worldConfig = configManager.worldConfig(this.level);
         this.advancedWorldConfig = configManager.worldAdvanced(this.level);
 
-        this.blockColors = BlockColors.create(this);
-        this.levelBiomeColorData = LevelBiomeColorData.create(this);
+        this.blockColors = new xyz.jpenilla.squaremap.common.render.scanning.BlockColors(this.advancedWorldConfig);
+        this.biomeColorTables = BiomeColorTables.create(this.level, this.advancedWorldConfig);
 
         this.dataPath = directoryProvider.getAndCreateDataDirectory(this.serverLevel());
         this.tilesPath = directoryProvider.getAndCreateTilesDirectory(this.serverLevel());
         this.tileStorage = new TileStorage(this.tilesPath, this.worldConfig.ZOOM_MAX);
-        this.imageIOExecutor = ImageIOExecutor.create(level, this.tileStorage, this.worldConfig.ZOOM_MAX, eventStream);
+        this.backgroundExecutor = new BackgroundExecutor(Threads.name("background", this.identifier()));
+        this.tileChangeLog = TileChangeLog.create(jsonCache, this.tilesPath.resolve(TileChangeLog.FILE_NAME), this.backgroundExecutor,
+            () -> this.publishTileEvents(eventStream));
+        this.imageSaveQueue = RegionImageSaveQueue.create(level, this.worldConfig.IMAGE_SAVING, this.tilesPath, this.worldConfig.ZOOM_MAX, tile -> {
+            this.pendingTileEvents.add(tile);
+            this.tileChangeLog.record(tile);
+        });
 
         this.layerRegistry(); // init the layer registry
         if (this.config().SPAWN_MARKER_ICON_ENABLED) {
@@ -89,8 +112,7 @@ public abstract class MapWorldInternal implements MapWorld {
 
         this.deserializeDirtyChunks();
 
-        this.renderManager = RenderManager.create(this, renderFactory);
-        this.renderManager.init();
+        this.renderScheduler = RenderScheduler.create(this, renderFactory);
     }
 
     @Override
@@ -103,8 +125,32 @@ public abstract class MapWorldInternal implements MapWorld {
         return Util.worldIdentifier(this.level);
     }
 
-    public RenderManager renderManager() {
-        return this.renderManager;
+    public RenderScheduler renderScheduler() {
+        return this.renderScheduler;
+    }
+
+    public RenderScheduler renderManager() {
+        return this.renderScheduler;
+    }
+
+    public SnapshotRequests snapshotRequests() {
+        return this.snapshotRequests;
+    }
+
+    public BackgroundExecutor backgroundExecutor() {
+        return this.backgroundExecutor;
+    }
+
+    public void publishWebJson(final String fileName, final Object data) {
+        this.backgroundExecutor.execute(() -> this.jsonCache.put(this.tilesPath.resolve(fileName), Util.gson().toJson(data)));
+    }
+
+    private void publishTileEvents(final EventStream stream) {
+        final List<Map<String, Integer>> changed = new java.util.ArrayList<>();
+        for (final TileCoordinate tile : this.pendingTileEvents) {
+            if (this.pendingTileEvents.remove(tile)) changed.add(Map.of("z", tile.zoom(), "x", tile.x(), "y", tile.z()));
+        }
+        if (!changed.isEmpty()) stream.publish("tiles-invalidated", Util.gson().toJson(Map.of("world", Util.levelWebName(this.level), "tiles", changed)), "base");
     }
 
     public Path dataPath() {
@@ -122,8 +168,12 @@ public abstract class MapWorldInternal implements MapWorld {
         return this.visibilityLimit;
     }
 
-    public LevelBiomeColorData levelBiomeColorData() {
-        return this.levelBiomeColorData;
+    public BiomeColorTables biomeColorTables() {
+        return this.biomeColorTables;
+    }
+
+    public xyz.jpenilla.squaremap.common.render.scanning.BlockColors blockColors() {
+        return this.blockColors;
     }
 
     public WorldConfig config() {
@@ -144,15 +194,11 @@ public abstract class MapWorldInternal implements MapWorld {
 
     @SuppressWarnings("ConstantConditions") // params for getMapColor are never used, check on mc update
     public int getMapColor(final BlockState state) {
-        final int special = this.blockColors.color(state);
-        if (special != -1) {
-            return special;
-        }
-        return Colors.rgb(state.getMapColor(null, null));
+        return this.blockColors.color(state);
     }
 
-    public void saveImage(final Image image) {
-        this.imageIOExecutor.saveImage(image);
+    public void saveImage(final RegionImage image) throws InterruptedException {
+        this.imageSaveQueue.saveImage(image);
     }
 
     public TileStorage tileStorage() {
@@ -160,11 +206,11 @@ public abstract class MapWorldInternal implements MapWorld {
     }
 
     public CompletableFuture<TileStorage.Stats> compactTiles(final boolean migrate) {
-        return this.imageIOExecutor.compact(migrate);
+        return this.imageSaveQueue.compact(migrate);
     }
 
     public void chunkModified(final ChunkCoordinate coord) {
-        if (!this.config().BACKGROUND_RENDER_ENABLED) {
+        if (!this.config().BACKGROUND_RENDER.enabled) {
             return;
         }
         if (!this.visibilityLimit().shouldRenderChunk(coord)) {
@@ -191,8 +237,10 @@ public abstract class MapWorldInternal implements MapWorld {
         if (this.layerRegistry().hasEntry(WorldBorderLayer.KEY)) {
             this.layerRegistry().unregister(WorldBorderLayer.KEY);
         }
-        this.renderManager.shutdown();
-        this.imageIOExecutor.shutdown();
+        this.renderScheduler.shutdown();
+        this.imageSaveQueue.shutdown();
+        this.tileChangeLog.close();
+        this.backgroundExecutor.shutdown();
         this.serializeDirtyChunks();
     }
 

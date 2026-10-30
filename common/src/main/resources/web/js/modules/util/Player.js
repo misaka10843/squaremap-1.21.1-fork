@@ -6,29 +6,47 @@ class Player {
         this.uuid = json.uuid;
         this.world = json.world;
         this.displayName = json.display_name !== undefined ? json.display_name : json.name;
-        this.x = 0;
-        this.z = 0;
-        this.armor = 0;
-        this.health = 20;
+        this.x = json.x;
+        this.z = json.z;
+        this.armor = json.armor;
+        this.health = json.health;
         this.tooltip = L.tooltip({
             permanent: true,
             direction: "right",
             offset: [10, 0],
             pane: "nameplate"
         });
-        this.marker = L.marker(P.toLatLng(json.x, json.z), {
-            icon: L.icon({
-                iconUrl: 'images/icon/player.png',
-                iconSize: [17, 16],
-                iconAnchor: [8, 9],
-                tooltipAnchor: [0, 0]
-            }),
-            rotationAngle: (180 + json.yaw)
-        });
-        if (P.worldList.curWorld.player_tracker.nameplates.enabled) {
-            this.updateNameplate(json);
-            this.marker.bindTooltip(this.tooltip);
+        this.marker = null;
+        this.syncMarker(json);
+    }
+    syncMarker(json) {
+        const world = P.worldList.curWorld;
+        if (world == null || world.name !== this.world || !world.player_tracker.enabled
+            || !Number.isFinite(json.x) || !Number.isFinite(json.z)) {
+            this.removeMarker();
+            return;
         }
+        const latlng = P.toLatLng(json.x, json.z);
+        const angle = 180 + (json.yaw ?? 0);
+        if (this.marker == null) {
+            this.marker = L.marker(latlng, {
+                icon: L.icon({
+                    iconUrl: 'images/icon/player.png',
+                    iconSize: [17, 16],
+                    iconAnchor: [8, 9],
+                    tooltipAnchor: [0, 0]
+                }),
+                rotationAngle: angle
+            });
+            if (world.player_tracker.nameplates.enabled) {
+                this.updateNameplate(json);
+                this.marker.bindTooltip(this.tooltip);
+            }
+        } else {
+            this.marker.setLatLng(latlng);
+            this.marker.setRotationAngle(angle);
+        }
+        this.addMarker();
     }
     getHeadUrl() {
         const configured = P.worldList.curWorld.player_tracker.nameplates.heads_url ?? '';
@@ -84,38 +102,29 @@ class Player {
         this.health = player.health;
         this.displayName = player.display_name !== undefined ? player.display_name : player.name;
         const link = document.getElementById(player.uuid);
-        const img = link.getElementsByTagName("img")[0];
-        const span = link.getElementsByTagName("span")[0];
-        this.retryListHead(img);
-        if (P.worldList.curWorld.name == player.world) {
-            if (P.worldList.curWorld.player_tracker.enabled) {
-                this.addMarker();
-            }
-            const latlng = P.toLatLng(player.x, player.z);
-            if (!this.marker.getLatLng().equals(latlng)) {
-                this.marker.setLatLng(latlng);
-            }
-            const angle = 180 + player.yaw;
-            if (this.marker.options.rotationAngle != angle) {
-                this.marker.setRotationAngle(angle);
-            }
-            img.classList.remove("other-world");
-            span.classList.remove("other-world");
-        } else {
-            this.removeMarker();
-            img.classList.add("other-world");
-            span.classList.add("other-world");
+        if (link != null) {
+            const img = link.getElementsByTagName("img")[0];
+            const span = link.getElementsByTagName("span")[0];
+            this.retryListHead(img);
+            const otherWorld = P.worldList.curWorld.name !== player.world;
+            img.classList.toggle("other-world", otherWorld);
+            span.classList.toggle("other-world", otherWorld);
         }
+        this.syncMarker(player);
         this.updateNameplate(player);
     }
     removeMarker() {
-        this.marker.remove();
         P.playerList.markers.delete(this.uuid);
+        if (this.marker == null) {
+            return;
+        }
+        this.marker.remove();
         P.map.removeLayer(this.marker);
-        P.layerControl.playersLayer.removeLayer(this.marker);
+        P.layerControl.playersLayer?.removeLayer(this.marker);
+        this.marker = null;
     }
     addMarker() {
-        if (!P.playerList.markers.has(this.uuid)) {
+        if (this.marker != null && !P.playerList.markers.has(this.uuid)) {
             this.marker.addTo(P.layerControl.playersLayer);
             P.playerList.markers.set(this.uuid, this.marker);
         }

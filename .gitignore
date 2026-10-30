@@ -119,3 +119,6 @@ buildNumber.properties
 run/
 build
 .gradle
+
+# Minecraft/bootstrap output from local tests
+**/logs/

@@ -248,6 +248,7 @@ public final class Messages {
     public static String LOG_COULD_NOT_READ_REGION = "Could not read map image for region <x>,<z> (image corrupted?). It will be overwritten.";
     @MessageKey("log.could-not-save-region")
     public static String LOG_COULD_NOT_SAVE_REGION = "Could not save map for region <x>,<z>";
+    public static String LOG_COULD_NOT_SAVE_IMAGE = "Could not save map tile <path>";
     @MessageKey("log.internal-web-not-running")
     public static String LOG_INTERNAL_WEB_STOP_ERROR = "An error occurred with the internal webserver";
 

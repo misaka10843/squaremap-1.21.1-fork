@@ -17,6 +17,12 @@ public final class VisibilityLimitImpl implements VisibilityLimit {
         this.world = world;
     }
 
+    public VisibilityLimitImpl snapshot() {
+        final VisibilityLimitImpl snapshot = new VisibilityLimitImpl(this.world);
+        snapshot.load(this.shapes.stream().map(shape -> shape instanceof WorldBorderShape border ? border.snapshot(this.world) : shape).toList());
+        return snapshot;
+    }
+
     /**
      * Counts the amount of chunks in the region for which
      * {@link #shouldRenderChunk(int, int)} returns {@code true}.

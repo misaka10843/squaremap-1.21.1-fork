@@ -6,7 +6,6 @@ import com.google.inject.Singleton;
 import java.io.IOException;
 import java.lang.reflect.Method;
 import java.util.List;
-import java.util.concurrent.ForkJoinPool;
 import javax.imageio.ImageIO;
 import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.text.Component;
@@ -19,7 +18,7 @@ import xyz.jpenilla.squaremap.common.config.Config;
 import xyz.jpenilla.squaremap.common.config.ConfigManager;
 import xyz.jpenilla.squaremap.common.config.Messages;
 import xyz.jpenilla.squaremap.common.data.DirectoryProvider;
-import xyz.jpenilla.squaremap.common.data.LevelBiomeColorData;
+import xyz.jpenilla.squaremap.common.render.scanning.BiomeColorTables;
 import xyz.jpenilla.squaremap.common.httpd.IntegratedServer;
 import xyz.jpenilla.squaremap.common.httpd.JsonCache;
 import xyz.jpenilla.squaremap.common.httpd.EventStream;
@@ -28,6 +27,7 @@ import xyz.jpenilla.squaremap.common.util.Components;
 import xyz.jpenilla.squaremap.common.util.ReflectionUtil;
 import xyz.jpenilla.squaremap.common.util.SquaremapJarAccess;
 import xyz.jpenilla.squaremap.common.util.UpdateChecker;
+import xyz.jpenilla.squaremap.common.util.concurrent.GlobalBackgroundExecutor;
 
 @DefaultQualifier(NonNull.class)
 @Singleton
@@ -42,6 +42,7 @@ public final class SquaremapCommon {
     private final SquaremapJarAccess squaremapJar;
     private final JsonCache jsonCache;
     private final EventStream eventStream;
+    private final GlobalBackgroundExecutor backgroundExecutor;
 
     @Inject
     private SquaremapCommon(
@@ -54,7 +55,8 @@ public final class SquaremapCommon {
         final Commands commands,
         final SquaremapJarAccess squaremapJar,
         final JsonCache jsonCache,
-        final EventStream eventStream
+        final EventStream eventStream,
+        final GlobalBackgroundExecutor backgroundExecutor
     ) {
         this.injector = injector;
         this.platform = platform;
@@ -66,6 +68,7 @@ public final class SquaremapCommon {
         this.squaremapJar = squaremapJar;
         this.jsonCache = jsonCache;
         this.eventStream = eventStream;
+        this.backgroundExecutor = backgroundExecutor;
     }
 
     public void init() {
@@ -77,8 +80,9 @@ public final class SquaremapCommon {
     }
 
     private void start() {
+        this.backgroundExecutor.start();
         this.squaremapJar.extract("web", this.directoryProvider.webDirectory(), Config.UPDATE_WEB_DIR);
-        LevelBiomeColorData.loadImages(this.directoryProvider);
+        BiomeColorTables.loadImages(this.directoryProvider);
         this.worldManager.start();
         this.platform.startCallback();
         if (Config.HTTPD_ENABLED) {
@@ -94,6 +98,7 @@ public final class SquaremapCommon {
         }
         this.platform.stopCallback();
         this.worldManager.shutdown();
+        this.backgroundExecutor.shutdown();
         if (Config.HTTPD_ENABLED && !Config.FLUSH_JSON_IMMEDIATELY) {
             this.jsonCache.flush();
         }
@@ -119,7 +124,7 @@ public final class SquaremapCommon {
         if (!Config.UPDATE_CHECKER) {
             return;
         }
-        ForkJoinPool.commonPool().execute(() -> new UpdateChecker(Logging.logger(), "jpenilla/squaremap").checkVersion());
+        Thread.ofVirtual().name("squaremap-update-check").start(() -> new UpdateChecker(Logging.logger(), "jpenilla/squaremap").checkVersion());
     }
 
     private void setupApi() {

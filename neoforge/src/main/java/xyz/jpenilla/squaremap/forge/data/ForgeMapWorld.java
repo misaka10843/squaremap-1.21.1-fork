@@ -9,8 +9,9 @@ import xyz.jpenilla.squaremap.common.config.ConfigManager;
 import xyz.jpenilla.squaremap.common.data.DirectoryProvider;
 import xyz.jpenilla.squaremap.common.data.MapWorldInternal;
 import xyz.jpenilla.squaremap.common.task.UpdateMarkers;
-import xyz.jpenilla.squaremap.common.task.render.RenderFactory;
+import xyz.jpenilla.squaremap.common.render.RenderFactory;
 import xyz.jpenilla.squaremap.common.httpd.EventStream;
+import xyz.jpenilla.squaremap.common.httpd.JsonCache;
 
 @DefaultQualifier(NonNull.class)
 public final class ForgeMapWorld extends MapWorldInternal {
@@ -22,9 +23,10 @@ public final class ForgeMapWorld extends MapWorldInternal {
         final RenderFactory renderFactory,
         final DirectoryProvider directoryProvider,
         final ConfigManager configManager,
-        final EventStream eventStream
+        final EventStream eventStream,
+        final JsonCache jsonCache
     ) {
-        super(level, renderFactory, directoryProvider, configManager, eventStream);
+        super(level, renderFactory, directoryProvider, configManager, eventStream, jsonCache);
 
         this.updateMarkers = new UpdateMarkers(this);
     }
