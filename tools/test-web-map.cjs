@@ -31,7 +31,10 @@ const server = http.createServer(async (req, res) => {
     counts.set(pathname, (counts.get(pathname) ?? 0) + 1);
     const json = value => { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
     if (pathname === '/tiles/settings.json') return json(rootSettings);
-    if ([worldName, otherWorld].some(world => pathname === `/tiles/${world}/settings.json`)) return json(worldSettings);
+    if ([worldName, otherWorld].some(world => pathname === `/tiles/${world}/settings.json`)) {
+        if (modernEvents) await new Promise(resolve => setTimeout(resolve, 400));
+        return json(worldSettings);
+    }
     if (pathname === `/tiles/${worldName}/changes.json`) return json({ epoch: 'test', seq: sequence, dropped: 0, changes: sequence ? [[sequence, 1, 0, 0]] : [] });
     if ([worldName, otherWorld].some(world => pathname === `/tiles/${world}/markers.json`)) {
         return json([{id: 'spawn', name: 'Spawn', timestamp: 1, order: 0, z_index: 0, control: true, hide: false, markers: {}}]);
@@ -181,6 +184,7 @@ async function checkModernProtocol(browser, base, failures) {
         return P.playerList?.streamConnected && P.playerList.players.get('test-player')?.x === 1 && P.createLayerManager?.dynamicSseConnected;
     });
     await page.waitForTimeout(500);
+    assert.equal(await page.locator('[id="test-player"]').count(), 1, 'early snapshots must render the player row after world settings load');
     const playerRequests = counts.get('/tiles/players.json') ?? 0;
     await page.waitForTimeout(1500);
     assert.equal(counts.get('/tiles/players.json') ?? 0, playerRequests, 'healthy player SSE must stop HTTP polling');

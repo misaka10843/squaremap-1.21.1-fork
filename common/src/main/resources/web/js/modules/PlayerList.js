@@ -13,7 +13,8 @@ class PlayerList {
         P.map.createPane("nameplate").style.zIndex = 1000;
     }
     tick() {
-        if (this.streamConnected || this.requestInFlight) return;
+        if (this.streamConnected) { this.renderStream(); return; }
+        if (this.requestInFlight) return;
         if (P.staticMode) {
             if (this.staticRequested) return;
             this.staticRequested = true;
@@ -34,18 +35,26 @@ class PlayerList {
     }
     resetStream() {
         this.streamConnected = false;
+        this.streamDirty = true;
         this.roster = new DeltaCollection('uuid');
         this.positions = new DeltaCollection('uuid');
     }
     applyStream(topic, message) {
         const collection = topic === 'players-roster' ? this.roster : this.positions;
         if (!collection.apply(message)) return false;
+        this.streamDirty = true;
+        this.renderStream();
+        return true;
+    }
+    renderStream() {
+        // A new SSE snapshot can arrive before this world's settings and projection are ready.
+        if (!this.streamDirty || !P.worldList?.curWorld?.zoom || P.worldList.curWorld.loading || !P.worldList.curWorld.player_tracker?.nameplates) return;
+        this.streamDirty = false;
         const rows = [...this.roster.items.values()].map(player => ({...player,
             ...(player.world === P.worldList?.curWorld?.name ? this.positions.items.get(String(player.uuid)) : {})}));
         this.updatePlayerList(rows);
         P.sidebar.players.legend.innerHTML = String(this.label)
             .replace(/{cur}/g, rows.length).replace(/{max}/g, this.roster.meta.max ?? '???');
-        return true;
     }
     showPlayer(uuid) {
         const player = this.players.get(uuid);
@@ -162,6 +171,7 @@ class PlayerList {
         }
     }
     clearPlayerMarkers() {
+        this.streamDirty = true;
         const playersToRemove = Array.from(this.players.keys());
         for (let i = 0; i < playersToRemove.length; i++) {
             const player = this.players.get(playersToRemove[i]);

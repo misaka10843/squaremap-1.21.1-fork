@@ -125,8 +125,8 @@ class JsonCacheTest {
 
     @Test
     void worldNetworkResponsesKeepPortalLinksAndOnlyMatchingGeometry() throws Exception {
-        this.cache.put("/tiles/create/network.json", "{\"tracks\":[{\"world\":\"a\"},{\"world\":\"b\"}],\"stations\":[],\"signals\":[],\"signal_blocks\":[{\"id\":\"x\",\"segments\":[{\"world\":\"a\"},{\"world\":\"b\"}]}],\"portals\":[{\"from\":{\"world\":\"a\"},\"to\":{\"world\":\"b\"}}]}");
-        this.uri = this.uri.resolve("/tiles/create/network.json?world=a");
+        this.cache.put("/tiles/create/network.json", "{\"tracks\":[{\"world\":\"nested/world\"},{\"world\":\"b\"}],\"stations\":[],\"signals\":[],\"signal_blocks\":[{\"id\":\"x\",\"segments\":[{\"world\":\"nested/world\"},{\"world\":\"b\"}]}],\"portals\":[{\"from\":{\"world\":\"nested/world\"},\"to\":{\"world\":\"b\"}}]}");
+        this.uri = this.uri.resolve("/tiles/create/network.json?world=nested%2Fworld");
         final var first = this.get("identity", null);
         final var json = com.google.gson.JsonParser.parseString(new String(first.body(), StandardCharsets.UTF_8)).getAsJsonObject();
         assertEquals(1, json.getAsJsonArray("tracks").size());

@@ -50,7 +50,7 @@ public final class JsonCache {
         final var worlds = exchange.getQueryParameters().get("world");
         if (relativePath.endsWith("/create/network.json") && worlds != null && worlds.size() == 1) {
             final String world = worlds.getFirst();
-            if (world.matches("[A-Za-z0-9_.-]{1,128}")) {
+            if (world.matches("[A-Za-z0-9_./:-]{1,256}")) {
                 Entry variant = original.variants.get(world);
                 if (variant == null) {
                     final var object = com.google.gson.JsonParser.parseString(original.json).getAsJsonObject();

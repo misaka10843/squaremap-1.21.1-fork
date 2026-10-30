@@ -487,7 +487,7 @@ class CreateLayerManager {
     }
 
     renderNetwork() {
-        if (!this.initialized || this.network == null || !P.worldList?.curWorld) return;
+        if (!this.initialized || this.network == null || !P.worldList?.curWorld?.zoom || P.worldList.curWorld.loading) return;
         const world = P.worldList.curWorld.name;
         this.layers.tracks.clearLayers();
         this.layers.portals.clearLayers();
@@ -563,7 +563,7 @@ class CreateLayerManager {
     }
 
     renderSignals() {
-        if (!this.initialized || this.network == null || !P.worldList?.curWorld) return;
+        if (!this.initialized || this.network == null || !P.worldList?.curWorld?.zoom || P.worldList.curWorld.loading) return;
         const world = P.worldList.curWorld.name;
         const states = new Map(this.signalData.map(signal => [signal.id, signal]));
         const active = new Set();
@@ -622,7 +622,7 @@ class CreateLayerManager {
     }
 
     renderBlocks() {
-        if (!this.initialized || !P.worldList?.curWorld || this.blockLines == null) return;
+        if (!this.initialized || !P.worldList?.curWorld?.zoom || P.worldList.curWorld.loading || this.blockLines == null) return;
         const world = P.worldList.curWorld.name;
         const activeBlocks = this.blockData;
         const signature = `${world}|` + activeBlocks
@@ -645,7 +645,7 @@ class CreateLayerManager {
     }
 
     renderTrains() {
-        if (!this.initialized || !P.worldList?.curWorld) return;
+        if (!this.initialized || !P.worldList?.curWorld?.zoom || P.worldList.curWorld.loading) return;
         const world = P.worldList.curWorld.name;
         const active = new Set();
 
@@ -954,13 +954,7 @@ class CreateLayerManager {
     }
 
     async fetchJson(url) {
-        try {
-            const response = await fetch(url, {cache: 'no-cache'});
-            if (!response.ok) return null;
-            return await response.json();
-        } catch (_) {
-            return null;
-        }
+        return P.getJSON(url);
     }
 
     escape(value) {

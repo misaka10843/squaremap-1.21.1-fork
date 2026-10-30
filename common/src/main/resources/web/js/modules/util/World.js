@@ -63,6 +63,7 @@ class World {
         }
     }
     load(callback) {
+        this.loading = true;
         this.staticMarkersRequested = false;
         P.getJSON(`tiles/${this.name}/settings.json`, async (json) => {
             const changes = P.staticMode ? null : await P.getJSON(`tiles/${this.name}/changes.json`);
@@ -99,6 +100,8 @@ class World {
             P.playerList.clearPlayerMarkers();
 
             // tick now, reset counter
+            this.loading = false;
+            P.createLayerManager?.redrawAll();
             P.tick_count = 0;
             P.tick();
 
