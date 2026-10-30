@@ -303,7 +303,7 @@ class CreateLayerManager {
                     <button class="create-refresh-button" type="button" title="立即刷新静态铁路">
                         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg>
                     </button>
-                    <button class="create-toggle-button" type="button" title="折叠面板">
+                    <button class="create-toggle-button" type="button" title="折叠面板" aria-label="折叠面板" aria-expanded="true">
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></svg>
                     </button>
                 </div>
@@ -320,15 +320,22 @@ class CreateLayerManager {
             this.statusCountdownElement = element.querySelector('.create-status-countdown');
             this.refreshButton = element.querySelector('.create-refresh-button');
             this.toggleButton = element.querySelector('.create-toggle-button');
+            const setCollapsed = collapsed => {
+                element.classList.toggle('collapsed', collapsed);
+                const label = collapsed ? '展开面板' : '折叠面板';
+                this.toggleButton.title = label;
+                this.toggleButton.setAttribute('aria-label', label);
+                this.toggleButton.setAttribute('aria-expanded', String(!collapsed));
+            };
             
             this.refreshButton.addEventListener('click', () => this.requestStaticRefresh());
             this.toggleButton.addEventListener('click', (e) => {
                 e.stopPropagation();
-                element.classList.toggle('collapsed');
+                setCollapsed(!element.classList.contains('collapsed'));
             });
             element.addEventListener('click', () => {
                 if (element.classList.contains('collapsed')) {
-                    element.classList.remove('collapsed');
+                    setCollapsed(false);
                 }
             });
             return element;

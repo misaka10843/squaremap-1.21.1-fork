@@ -57,8 +57,7 @@ class World {
         const keys = Array.from(this.markerLayers.keys());
         for (let i = 0; i < keys.length; i++) {
             const layer = this.markerLayers.get(keys[i]);
-            P.layerControl.controls.removeLayer(layer);
-            layer.remove();
+            P.layerControl.removeOverlay(layer);
             this.markerLayers.delete(keys[i]);
         }
     }

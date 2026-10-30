@@ -1,3 +1,5 @@
+import java.util.zip.ZipFile
+
 plugins {
   id("squaremap.platform.loom")
 }
@@ -137,6 +139,34 @@ tasks.remapJar {
 }
 
 squaremapPlatform.loom.modInfoFilePath = "META-INF/neoforge.mods.toml"
+
+val verifyWebResources by tasks.registering {
+  group = "verification"
+  description = "Verify that every web image, including the default icons, reaches the production jar."
+  dependsOn(tasks.remapJar)
+  val images = project(":squaremap-common").layout.projectDirectory.dir("src/main/resources/web/images")
+  inputs.dir(images)
+  inputs.file(tasks.remapJar.flatMap { it.archiveFile })
+  doLast {
+    val imageRoot = images.asFile.toPath()
+    listOf("blue-cube-smol.png", "green-cube-smol.png", "purple-cube-smol.png", "red-cube-smol.png", "player.png", "spawn.png").forEach {
+      check(imageRoot.resolve("icon/$it").toFile().isFile) { "Missing source web icon: $it" }
+    }
+    ZipFile(tasks.remapJar.get().archiveFile.get().asFile).use { jar ->
+      fileTree(images).files.filter { it.isFile }.forEach { image ->
+        val entryName = "web/images/" + imageRoot.relativize(image.toPath()).toString().replace('\\', '/')
+        val entry = checkNotNull(jar.getEntry(entryName)) { "Missing production web resource: $entryName" }
+        check(jar.getInputStream(entry).use { it.readBytes() }.contentEquals(image.readBytes())) {
+          "Production web resource differs from source: $entryName"
+        }
+      }
+    }
+  }
+}
+
+tasks.build {
+  dependsOn(verifyWebResources)
+}
 
 publishMods.modrinth {
   minecraftVersions.add(libs.versions.minecraft)

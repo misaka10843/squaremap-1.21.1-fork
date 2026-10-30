@@ -122,3 +122,7 @@ build
 
 # Minecraft/bootstrap output from local tests
 **/logs/
+
+# Web icons are project assets; the macOS Icon rule above also matches this directory.
+!common/src/main/resources/web/images/icon/
+!common/src/main/resources/web/images/icon/**

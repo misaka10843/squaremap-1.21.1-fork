@@ -10,8 +10,10 @@ let sequence = 0;
 let eventsEnabled = false;
 const eventClients = new Set();
 const worldName = 'minecraft_overworld';
+const otherWorld = 'minecraft_the_nether';
 const rootSettings = {
-    worlds: [{ name: worldName, display_name: 'Overworld', order: 0, type: 'normal', icon: '' }],
+    worlds: [{ name: worldName, display_name: 'Overworld', order: 0, type: 'normal', icon: '' },
+        { name: otherWorld, display_name: 'Nether', order: 1, type: 'nether', icon: '' }],
     ui: { title: 'squaremap test — {world}', sidebar: { pinned: 'unpinned', player_list_label: 'Players {cur}/{max}', world_list_label: 'Worlds' },
         coordinates: { enabled: true, html: '{x}, {z}' }, link: { enabled: true } }
 };
@@ -20,15 +22,17 @@ const worldSettings = {
     player_tracker: { enabled: true, update_interval: 1, show_controls: true, default_hidden: false, label: 'Players', priority: 1, z_index: 100,
         nameplates: { enabled: true, show_heads: false, show_armor: true, show_health: true, heads_url: '' } }
 };
-const tilePath = /^\/tiles\/minecraft_overworld\/\d+\/-?\d+_-?\d+\.png$/;
+const tilePath = /^\/tiles\/minecraft_(?:overworld|the_nether)\/\d+\/-?\d+_-?\d+\.png$/;
 const server = http.createServer(async (req, res) => {
     const pathname = new URL(req.url, 'http://localhost').pathname;
     counts.set(pathname, (counts.get(pathname) ?? 0) + 1);
     const json = value => { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
     if (pathname === '/tiles/settings.json') return json(rootSettings);
-    if (pathname === `/tiles/${worldName}/settings.json`) return json(worldSettings);
+    if ([worldName, otherWorld].some(world => pathname === `/tiles/${world}/settings.json`)) return json(worldSettings);
     if (pathname === `/tiles/${worldName}/changes.json`) return json({ epoch: 'test', seq: sequence, dropped: 0, changes: sequence ? [[sequence, 1, 0, 0]] : [] });
-    if (pathname === `/tiles/${worldName}/markers.json`) return json([]);
+    if ([worldName, otherWorld].some(world => pathname === `/tiles/${world}/markers.json`)) {
+        return json([{id: 'spawn', name: 'Spawn', timestamp: 1, order: 0, z_index: 0, control: true, hide: false, markers: {}}]);
+    }
     if (pathname === '/tiles/players.json') return json({ players: [], max: 20 });
     if (pathname === '/tiles/create/status.json') return json({ available: false, enabled: false });
     if (pathname === '/api/events') {
@@ -75,6 +79,7 @@ const server = http.createServer(async (req, res) => {
         assert.equal(counts.get(`/tiles/${worldName}/markers.json`), 1);
         assert.equal(counts.get('/tiles/create/status.json'), 1);
         assertTrueWebpFallback(counts);
+        await checkWorldSwitchingAndCreatePanel(staticPage);
         await fs.mkdir(path.resolve(__dirname, '../build/diagnostics'), { recursive: true });
         await staticPage.screenshot({ path: path.resolve(__dirname, '../build/diagnostics/static-map.png') });
         await staticPage.close();
@@ -140,6 +145,54 @@ const server = http.createServer(async (req, res) => {
 function assertTrueWebpFallback(requests) {
     assert.ok([...requests.keys()].some(url => url.endsWith('.webp')));
     assert.ok([...requests.keys()].some(url => tilePath.test(url)));
+}
+
+async function checkWorldSwitchingAndCreatePanel(page) {
+    const spawnRows = page.locator('.drawer-layer-row').filter({hasText: /^Spawn$/});
+    await spawnRows.first().waitFor();
+    for (const world of [otherWorld, worldName, otherWorld, worldName]) {
+        await page.locator(`.world-row[id="${world}"]`).click();
+        await page.waitForFunction(async name => {
+            const {P} = await import('/js/modules/Squaremap.js');
+            return P.worldList.curWorld.name === name && P.worldList.curWorld.markerLayers.size === 1;
+        }, world);
+        await page.waitForFunction(() => [...document.querySelectorAll('.drawer-layer-row .layer-name')].some(row => row.textContent === 'Spawn'));
+        assert.equal(await spawnRows.count(), 1, 'switching worlds must remove the previous Spawn drawer row');
+        const visibilitySaved = await page.evaluate(() => localStorage.getItem('hide_spawn'));
+        assert.notEqual(visibilitySaved, 'true', 'unloading must not persist a user hide preference');
+    }
+    assert.equal(await page.locator('.world-row img').evaluateAll(images => images.every(image => image.complete && image.naturalWidth > 0)), true);
+    await page.evaluate(async () => {
+        const {P} = await import('/js/modules/Squaremap.js');
+        P.createLayerManager.applyStatus({available: true, enabled: false});
+    });
+    const panel = page.locator('.create-map-status');
+    const toggle = panel.locator('.create-toggle-button');
+    await page.mouse.move(10, 650);
+    assert.equal(await toggle.evaluate(button => getComputedStyle(button).opacity), '0');
+    await panel.hover();
+    await toggle.click();
+    await page.mouse.move(10, 650);
+    await page.waitForTimeout(350);
+    assert.equal(await panel.evaluate(element => element.classList.contains('collapsed')), true);
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+    assert.equal(await toggle.evaluate(button => getComputedStyle(button).opacity), '0');
+    const centered = async selector => {
+        const outer = await panel.boundingBox();
+        const inner = await panel.locator(selector).boundingBox();
+        assert.ok(Math.abs(outer.x + outer.width / 2 - inner.x - inner.width / 2) < 1, selector + ' horizontal center');
+        assert.ok(Math.abs(outer.y + outer.height / 2 - inner.y - inner.height / 2) < 1, selector + ' vertical center');
+    };
+    await centered('.create-refresh-ring');
+    await panel.hover();
+    assert.equal(await toggle.evaluate(button => getComputedStyle(button).opacity), '1');
+    await centered('.create-toggle-button');
+    assert.equal(await panel.locator('.create-refresh-ring').evaluate(ring => getComputedStyle(ring).visibility), 'hidden');
+    await toggle.click();
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+    await page.waitForTimeout(350);
+    assert.equal(Math.round((await panel.boundingBox()).width), 320);
+    console.log('PASS: repeated world switches retain one Spawn row; world icons load; Create ring and hover button are centered');
 }
 
 async function waitForRequest(url, before) {
