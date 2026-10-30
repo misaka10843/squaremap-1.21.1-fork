@@ -1,3 +1,5 @@
+import java.security.MessageDigest
+
 plugins {
   id("squaremap.common")
 }
@@ -59,4 +61,33 @@ dependencies {
 
 tasks.test {
   useJUnitPlatform()
+}
+
+tasks.processResources {
+  exclude("web/node_modules/**", "web/package*.json")
+  doLast {
+    val source = layout.projectDirectory.dir("src/main/resources/web").asFile
+    val digest = MessageDigest.getInstance("SHA-256")
+    source.walkTopDown().filter { it.isFile && it.extension in setOf("js", "css", "html") && !it.relativeTo(source).invariantSeparatorsPath.contains("node_modules/") }
+      .sortedBy { it.relativeTo(source).invariantSeparatorsPath }.forEach {
+        digest.update(it.relativeTo(source).invariantSeparatorsPath.toByteArray(Charsets.UTF_8))
+        digest.update(it.readBytes())
+      }
+    val version = digest.digest().take(8).joinToString("") { "%02x".format(it.toInt() and 0xff) }
+    val web = destinationDir.resolve("web")
+    web.walkTopDown().filter { it.isFile && it.extension == "js" && !it.relativeTo(web).invariantSeparatorsPath.contains("node_modules/") }.forEach { file ->
+      val content = file.readText(Charsets.UTF_8).replace(Regex("""(['"])(\.\.?/[^'"]+\.js)(?:\?[^'"]*)?\1""")) {
+        "${it.groupValues[1]}${it.groupValues[2]}?v=$version${it.groupValues[1]}"
+      }
+      file.writeText(content, Charsets.UTF_8)
+    }
+    val index = web.resolve("index.html")
+    index.writeText(index.readText(Charsets.UTF_8).replace(Regex("""((?:src|href)=["'])([^"']+\.(?:js|css))(?:\?[^"']*)?(["'])""")) {
+      "${it.groupValues[1]}${it.groupValues[2]}?v=$version${it.groupValues[3]}"
+    }, Charsets.UTF_8)
+  }
+}
+
+tasks.jar {
+  exclude("web/node_modules/**", "web/package*.json")
 }

@@ -108,6 +108,33 @@ class JsonCacheTest {
         assertThrows(IllegalArgumentException.class, () -> this.cache.put(this.directory.resolve("outside.json"), "{}"));
     }
 
+    @Test
+    void cursorResponsesKeepStableValidatorsAndPreserveRecoveryMetadata() throws Exception {
+        this.cache.put("/tiles/changes.json", "{\"epoch\":\"e\",\"seq\":5,\"dropped\":2,\"changes\":[[3,1,0,0],[5,1,2,2]]}");
+        this.uri = this.uri.resolve("/tiles/changes.json?since=3");
+        final var first = this.get("identity", null);
+        final var json = com.google.gson.JsonParser.parseString(new String(first.body(), StandardCharsets.UTF_8)).getAsJsonObject();
+        assertEquals(1, json.getAsJsonArray("changes").size());
+        assertEquals(2, json.get("dropped").getAsInt());
+        final String tag = first.headers().firstValue("etag").orElseThrow();
+        assertFalse(tag.substring(1, tag.length() - 1).contains("\""));
+        assertEquals(304, this.get("identity", tag).statusCode());
+        this.uri = this.uri.resolve("/tiles/changes.json?since=5");
+        assertEquals(200, this.get("identity", tag).statusCode());
+    }
+
+    @Test
+    void worldNetworkResponsesKeepPortalLinksAndOnlyMatchingGeometry() throws Exception {
+        this.cache.put("/tiles/create/network.json", "{\"tracks\":[{\"world\":\"a\"},{\"world\":\"b\"}],\"stations\":[],\"signals\":[],\"signal_blocks\":[{\"id\":\"x\",\"segments\":[{\"world\":\"a\"},{\"world\":\"b\"}]}],\"portals\":[{\"from\":{\"world\":\"a\"},\"to\":{\"world\":\"b\"}}]}");
+        this.uri = this.uri.resolve("/tiles/create/network.json?world=a");
+        final var first = this.get("identity", null);
+        final var json = com.google.gson.JsonParser.parseString(new String(first.body(), StandardCharsets.UTF_8)).getAsJsonObject();
+        assertEquals(1, json.getAsJsonArray("tracks").size());
+        assertEquals(1, json.getAsJsonArray("signal_blocks").get(0).getAsJsonObject().getAsJsonArray("segments").size());
+        assertEquals(1, json.getAsJsonArray("portals").size());
+        assertEquals(304, this.get("identity", first.headers().firstValue("etag").orElseThrow()).statusCode());
+    }
+
     private HttpResponse<byte[]> get(final String encoding, final String etag) throws Exception {
         final var request = HttpRequest.newBuilder(this.uri).timeout(java.time.Duration.ofSeconds(5)).header("Accept-Encoding", encoding);
         if (etag != null) request.header("If-None-Match", etag);

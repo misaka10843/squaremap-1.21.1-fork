@@ -139,7 +139,8 @@ class LayerControl {
         this.tileLayer1?.applyChanges(changes);
     }
     invalidateTiles(tiles) {
-        this.tileLayer1?._reloadChanged(tiles.map(tile => [1, tile.z, tile.x, tile.y]), 0);
+        this.invalidationVersion = Math.max(Date.now(), (this.invalidationVersion ?? 0) + 1);
+        this.tileLayer1?._reloadChanged(tiles.map(tile => [this.invalidationVersion, tile.z, tile.x, tile.y]), 0);
     }
 }
 

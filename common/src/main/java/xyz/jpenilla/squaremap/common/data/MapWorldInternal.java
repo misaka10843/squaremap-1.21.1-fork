@@ -150,7 +150,7 @@ public abstract class MapWorldInternal implements MapWorld {
         for (final TileCoordinate tile : this.pendingTileEvents) {
             if (this.pendingTileEvents.remove(tile)) changed.add(Map.of("z", tile.zoom(), "x", tile.x(), "y", tile.z()));
         }
-        if (!changed.isEmpty()) stream.publish("tiles-invalidated", Util.gson().toJson(Map.of("world", Util.levelWebName(this.level), "tiles", changed)), "base");
+        if (!changed.isEmpty()) stream.publish("tiles-invalidated", Util.gson().toJson(Map.of("world", Util.levelWebName(this.level), "tiles", changed)), "base", Util.levelWebName(this.level));
     }
 
     public Path dataPath() {

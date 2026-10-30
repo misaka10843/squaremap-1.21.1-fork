@@ -42,9 +42,68 @@ public final class JsonCache {
 
     boolean handle(final HttpServerExchange exchange) {
         final String relativePath = exchange.getRelativePath();
-        final @Nullable Entry cached = this.cache.get(relativePath);
-        if (cached == null) {
+        final @Nullable Entry original = this.cache.get(relativePath);
+        if (original == null) {
             return false;
+        }
+        Entry cached = original;
+        final var worlds = exchange.getQueryParameters().get("world");
+        if (relativePath.endsWith("/create/network.json") && worlds != null && worlds.size() == 1) {
+            final String world = worlds.getFirst();
+            if (world.matches("[A-Za-z0-9_.-]{1,128}")) {
+                Entry variant = original.variants.get(world);
+                if (variant == null) {
+                    final var object = com.google.gson.JsonParser.parseString(original.json).getAsJsonObject();
+                    for (final String field : java.util.List.of("tracks", "stations", "signals")) {
+                        final var filtered = new com.google.gson.JsonArray();
+                        final var source = object.getAsJsonArray(field);
+                        if (source != null) for (final var row : source) {
+                            if (world.equals(row.getAsJsonObject().get("world").getAsString())) filtered.add(row);
+                        }
+                        object.add(field, filtered);
+                    }
+                    final var blocks = new com.google.gson.JsonArray();
+                    if (object.has("signal_blocks")) for (final var block : object.getAsJsonArray("signal_blocks")) {
+                        final var segments = new com.google.gson.JsonArray();
+                        for (final var segment : block.getAsJsonObject().getAsJsonArray("segments")) {
+                            if (world.equals(segment.getAsJsonObject().get("world").getAsString())) segments.add(segment);
+                        }
+                        if (!segments.isEmpty()) {
+                            final var copy = block.getAsJsonObject().deepCopy();
+                            copy.add("segments", segments); blocks.add(copy);
+                        }
+                    }
+                    object.add("signal_blocks", blocks);
+                    final var portals = new com.google.gson.JsonArray();
+                    if (object.has("portals")) for (final var portal : object.getAsJsonArray("portals")) {
+                        final var pair = portal.getAsJsonObject();
+                        if (java.util.List.of("from", "to").stream().anyMatch(side -> pair.has(side)
+                            && world.equals(pair.getAsJsonObject(side).get("world").getAsString()))) portals.add(portal);
+                    }
+                    object.add("portals", portals);
+                    variant = new Entry(object.toString(), true, false,
+                        original.etag.substring(1, original.etag.length() - 1) + "-world-" + world);
+                    if (original.variants.size() < 16) original.variants.putIfAbsent(world, variant);
+                }
+                cached = variant;
+            }
+        }
+        final var cursors = exchange.getQueryParameters().get("since");
+        if (relativePath.endsWith("/changes.json") && cursors != null && cursors.size() == 1) {
+            try {
+                final long since = Long.parseLong(cursors.getFirst());
+                if (since >= 0) {
+                    final var object = com.google.gson.JsonParser.parseString(original.json).getAsJsonObject();
+                    final var changes = new com.google.gson.JsonArray();
+                    for (final var item : object.getAsJsonArray("changes")) {
+                        if (item.getAsJsonArray().get(0).getAsLong() > since) changes.add(item);
+                    }
+                    object.add("changes", changes);
+                    cached = new Entry(object.toString(), true, false, original.etag.substring(1, original.etag.length() - 1) + "-since-" + since);
+                }
+            } catch (final RuntimeException ignored) {
+                // Malformed cursors use the complete compatibility document.
+            }
         }
 
         this.lastAccessNanos.put(relativePath, System.nanoTime());
@@ -87,7 +146,7 @@ public final class JsonCache {
         this.put('/' + FileUtil.invariantSeparatorsPathString(relative), json, false, true);
     }
 
-    private static boolean matches(final @Nullable String header, final String etag) {
+    static boolean matches(final @Nullable String header, final String etag) {
         if (header == null) return false;
         for (final String item : header.split(",")) {
             final String token = item.trim();
@@ -193,13 +252,17 @@ public final class JsonCache {
         private final String etag;
         private final String gzipEtag;
         private volatile byte @Nullable [] gzip;
+        private final Map<String, Entry> variants = new ConcurrentHashMap<>();
 
         private Entry(final String json, final boolean volatileEntry, final boolean precompress) {
+            this(json, volatileEntry, precompress, ETAG_EPOCH + '-' + NEXT_ETAG.incrementAndGet());
+        }
+
+        private Entry(final String json, final boolean volatileEntry, final boolean precompress, final String version) {
             this.json = json;
             this.volatileEntry = volatileEntry;
             this.utf8 = json.getBytes(StandardCharsets.UTF_8);
             this.utf8Length = this.utf8.length;
-            final String version = ETAG_EPOCH + '-' + NEXT_ETAG.incrementAndGet();
             this.etag = '"' + version + "-json\"";
             this.gzipEtag = '"' + version + "-gzip\"";
             if (precompress && Config.HTTPD_ENABLED && this.utf8Length >= GZIP_MIN_BYTES) this.gzip();

@@ -101,12 +101,13 @@ public final class RegionImageSaveQueue {
     }
 
     // Runs as the tile's task, and must not throw so the save is always finished
-    private void save(final TileCoordinate tile, final Consumer<BufferedImage> update) {
+    private void save(final TileCoordinate tile, final java.util.function.Predicate<BufferedImage> update) {
         final BufferedImage image;
+        final boolean changed;
         try {
             image = this.tiles.read(tile);
-            update.accept(image);
-            this.tiles.write(tile, image);
+            changed = update.test(image) || this.tiles.needsWrite(tile, image);
+            if (changed) this.tiles.write(tile, image);
         } catch (final Throwable ex) {
             try {
                 Logging.logger().error("Could not save map tile {}", this.tiles.path(tile), ex);
@@ -116,7 +117,7 @@ public final class RegionImageSaveQueue {
             return;
         }
         try {
-            this.written.accept(tile);
+            if (changed) this.written.accept(tile);
         } catch (final Throwable ex) {
             Logging.logger().warn("Failed to report written tile {}", tile, ex);
         }
@@ -124,14 +125,15 @@ public final class RegionImageSaveQueue {
             this.finished();
             return;
         }
+        // Even an unchanged child must rebuild missing/outdated parents (e.g. after a downsampling upgrade).
         // Queued before this tile's next update can run, so parent updates run in the order their sources were written
         this.tileExecutor.execute(tile.parent(), () -> this.save(tile.parent(), parent -> downsampleInto(tile, image, parent)));
     }
 
-    private static void downsampleInto(final TileCoordinate child, final BufferedImage childImage, final BufferedImage parent) {
+    private static boolean downsampleInto(final TileCoordinate child, final BufferedImage childImage, final BufferedImage parent) {
         // The child covers one quadrant of its parent
         final int half = TileImages.SIZE / 2;
-        ZoomDownsampler.downsample(childImage, parent, (child.x() & 1) * half, (child.z() & 1) * half);
+        return ZoomDownsampler.downsample(childImage, parent, (child.x() & 1) * half, (child.z() & 1) * half);
     }
 
     /**

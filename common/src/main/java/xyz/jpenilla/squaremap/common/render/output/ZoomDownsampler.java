@@ -37,7 +37,7 @@ final class ZoomDownsampler {
      * @param targetX x of the destination area in {@code target}
      * @param targetY y of the destination area in {@code target}
      */
-    static void downsample(final BufferedImage source, final BufferedImage target, final int targetX, final int targetY) {
+    static boolean downsample(final BufferedImage source, final BufferedImage target, final int targetX, final int targetY) {
         final int size = source.getWidth();
         final int half = size / 2;
         final int[] in = source.getRGB(0, 0, size, size, null, 0, size);
@@ -66,7 +66,16 @@ final class ZoomDownsampler {
                 }
             }
         }
-        target.setRGB(targetX, targetY, half, half, out, 0, half);
+        final int[] row = new int[half];
+        for (int y = 0; y < half; y++) {
+            target.getRGB(targetX, targetY + y, half, 1, row, 0, half);
+            for (int x = 0; x < half; x++) if ((row[x] >>> 24) == 0) row[x] = 0;
+            if (!java.util.Arrays.equals(row, 0, half, out, y * half, (y + 1) * half)) {
+                target.setRGB(targetX, targetY, half, half, out, 0, half);
+                return true;
+            }
+        }
+        return false;
     }
 
     private static int fromLinear(final int weighted, final int alpha) {

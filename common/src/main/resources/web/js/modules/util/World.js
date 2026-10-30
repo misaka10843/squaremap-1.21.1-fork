@@ -41,7 +41,8 @@ class World {
         this.changePollInFlight = true;
         this.lastChangePoll = Date.now();
         try {
-            const changes = await P.getJSON(`tiles/${this.name}/changes.json`);
+            const cursor = this.tileChanges?.seq;
+            const changes = await P.getJSON(`tiles/${this.name}/changes.json${Number.isSafeInteger(cursor) ? `?since=${cursor}` : ''}`);
             if (changes != null && P.worldList.curWorld === this) {
                 this.tileChanges = changes;
                 this.changeLogAvailable = true;

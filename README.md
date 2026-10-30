@@ -3,7 +3,7 @@
 [![Build](https://img.shields.io/github/actions/workflow/status/misaka10843/squaremap-1.21.1-fork/build.yml?branch=main)](https://github.com/misaka10843/squaremap-1.21.1-fork/actions)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-这是面向 Minecraft 1.21.1、NeoForge 和 Java 21 的 [squaremap](https://github.com/jpenilla/squaremap) 分支，在浏览器中展示服务器俯视地图、玩家、标记和 Create 铁路。当前版本为 `1.3.2-fork.2`，本仓库只构建 NeoForge 平台。
+这是面向 Minecraft 1.21.1、NeoForge 和 Java 21 的 [squaremap](https://github.com/jpenilla/squaremap) 分支，在浏览器中展示服务器俯视地图、玩家、标记和 Create 铁路。当前版本为 `1.3.2-fork.3`，本仓库只构建 NeoForge 平台。
 
 ## 本版变更
 
@@ -31,8 +31,13 @@
 - Create 6.x 覆盖层展示直线与曲线轨道、车站、信号、占用区段、列车和跨维度连接，使用现有网页服务端口；无人查看时暂停采样，静态网络刷新分摊到多个 tick。
 - 同源玩家头像缓存、可搜索标记侧栏、世界与图层切换；修复缺失玩家坐标、退出后跟随异常、切换世界累积 Spawn 图层，以及 Create 折叠控件的居中和悬停显示。
 - 补齐默认世界、玩家与 Spawn 图标，构建时核对最终 JAR 中的网页图片。
+- 内置服务自动 gzip 压缩前端文本资源，构建时为入口、JS 模块与 CSS 生成统一版本号；升级后使用新 URL，未变版本可复用浏览器缓存。
+- 玩家名单与当前世界坐标分别增量推送；Create 按世界和开启的列车、信号、占用图层订阅，只传变化字段。断线或版本缺口以完整快照恢复，旧 JSON 接口继续提供轮询后备。
+- 大型 SSE 数据包按浏览器能力协商 gzip 压缩；状态去重，倒计时在网页本地更新，隐藏标签页时断开订阅。
+- 瓦片使用版本 URL，离开视野后中止未完成请求；变更记录支持游标增量，Create 静态网络按世界裁剪且扫描结果未变时不重复发布。
+- 像素未变且文件完整的瓦片跳过写入与刷新通知，减少重复下载；仍逐级检查缩放图，补建缺失或过时的父级瓦片。
 
-移植过程中已有一轮 NeoForge 构建、83 项 Java 回归测试及网页刷新检查通过。本次修订另通过正式 JAR 打包、60 张网页图片核对，以及世界切换和 Create 控件的浏览器回归；Java 测试套件未重跑。真实服务器上的 C2ME/Moonrise、Vanilla Backport、Create 联合验收仍待完成。`/map link`、装备隐身配置和新版前端构建工具链尚未纳入。
+网络与瓦片优化通过 20 项定向测试、60 张网页图片核对及打包后前端的浏览器回归，覆盖压缩、增量顺序、重复写入、世界切换、隐藏与恢复、断线后补全。本轮未重跑完整 Java 测试套件，真实服务器上的 C2ME/Moonrise、Vanilla Backport、Create 联合验收仍待完成。`/map link`、装备隐身配置和新版前端构建工具链尚未纳入。
 
 ## 安装与使用
 
@@ -68,6 +73,10 @@
 默认别名为 `/map`，世界参数以命令补全为准。Create 命令在集成可用时注册。
 
 ## 配置说明
+
+内置服务的网络优化默认启用，无需反向代理：浏览器支持时压缩 JS、CSS、HTML、SVG 和 JSON 文本；PNG/WebP 图片保持原格式。带构建版本的 JS/CSS 可长期缓存，HTML 与未版本化文本继续验证更新。带版本的瓦片缓存 5 分钟，变化通知会切换 URL；缺失瓦片短暂缓存 30 秒。实时推送失败时恢复 HTTP 轮询，纯静态部署继续读取完整 JSON。
+
+SSE 连接按需订阅，较大且压缩后有收益的数据包才使用 gzip 封装；不支持浏览器解压接口时发送普通 JSON。玩家坐标推送遵守各世界刷新间隔，Create 采样仍由 `settings.create-map` 控制。静态浏览模式仍通过 `?static=true` 开启。
 
 以下键相对注明的节点，默认值以首次生成配置为准。`config-version` 由自动迁移管理。修改渲染或服务设置后执行 `/squaremap reload`。
 
@@ -291,7 +300,7 @@ world-settings:
 Push / PR 工作流只构建附件。发版使用 **Actions → Release NeoForge 1.21.1 (manual) → Run workflow**：
 
 1. 更新 `gradle.properties` 的版本与本 README 的“本版变更”，提交并推送。
-2. 选择分支，标签填写 `v` 加源码版本，例如 `v1.3.2-fork.2`。
+2. 选择分支，标签填写 `v` 加源码版本，例如 `v1.3.2-fork.3`。
 3. 默认跳过测试，创建草稿预发布。勾选 `run_tests` 运行 Java 测试，取消 `draft` 会在该次手动运行时直接发布。
 4. 上传正式 JAR 与 `SHA256SUMS`，从 README 提取发版说明。已有标签必须指向本次提交，已有 Release 不会被覆盖。
 

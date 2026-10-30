@@ -75,6 +75,11 @@ public final class CreateTrackMapIntegration {
     /* Accessed only from the Minecraft server thread unless marked volatile. */
     private volatile Map<UUID, SignalRef> signalRefs = Map.of();
     private volatile Set<UUID> knownSignalBlocks = Set.of();
+    private volatile Map<String, Set<String>> dynamicWorlds = Map.of();
+    private final Map<String, Set<String>> streamWorlds = new java.util.concurrent.ConcurrentHashMap<>();
+    private long lastStatusEventNanos;
+    private @Nullable String lastStatusState;
+    private volatile @Nullable String lastNetworkState;
     private volatile @Nullable StaticBuildJob staticBuildJob;
     private volatile boolean refreshRequested;
     private volatile boolean forceRefreshRequested;
@@ -216,9 +221,9 @@ public final class CreateTrackMapIntegration {
             if (this.ticks % Math.max(5, Config.CREATE_MAP_UPDATE_INTERVAL_TICKS) == 0) {
                 final boolean combinedViewer = this.eventStream.hasViewers("create-dynamic")
                     || this.hasRecentEndpointViewer(DYNAMIC_PATH, "/api/dynamic");
-                final boolean signalViewer = combinedViewer || this.hasRecentEndpointViewer(SIGNALS_PATH, "/api/signals");
-                final boolean blockViewer = combinedViewer || this.hasRecentEndpointViewer(BLOCKS_PATH, "/api/blocks");
-                final boolean trainViewer = combinedViewer || this.hasRecentEndpointViewer(TRAINS_PATH, "/api/trains");
+                final boolean signalViewer = combinedViewer || this.eventStream.hasViewers("create-signals") || this.hasRecentEndpointViewer(SIGNALS_PATH, "/api/signals");
+                final boolean blockViewer = combinedViewer || this.eventStream.hasViewers("create-blocks") || this.hasRecentEndpointViewer(BLOCKS_PATH, "/api/blocks");
+                final boolean trainViewer = combinedViewer || this.eventStream.hasViewers("create-trains") || this.hasRecentEndpointViewer(TRAINS_PATH, "/api/trains");
                 if (signalViewer || blockViewer || trainViewer) {
                     final long captureStarted = System.nanoTime();
                     this.captureDynamic(server, railways, signalViewer, blockViewer, trainViewer, combinedViewer);
@@ -273,6 +278,8 @@ public final class CreateTrackMapIntegration {
     }
 
     private void clearPublishedData(final boolean includeStatus) {
+        this.lastNetworkState = null;
+        for (final String topic : List.of("create-signals", "create-blocks", "create-trains")) this.publishWorldCollection(topic, List.of());
         this.signalRefs = Map.of();
         this.knownSignalBlocks = Set.of();
         this.publishedTrackCount = 0;
@@ -310,7 +317,7 @@ public final class CreateTrackMapIntegration {
 
     private boolean hasRecentViewer() {
         final long timeout = TimeUnit.SECONDS.toNanos(Config.CREATE_MAP_IDLE_TIMEOUT_SECONDS);
-        return this.eventStream.hasViewers("create-dynamic")
+        return this.eventStream.hasViewers("base") || this.hasDynamicSubscribers()
             || this.jsonCache.accessedWithin(STATUS_PATH, timeout)
             || this.jsonCache.accessedWithin(NETWORK_PATH, timeout)
             || this.jsonCache.accessedWithin("/api/network", timeout)
@@ -322,7 +329,7 @@ public final class CreateTrackMapIntegration {
     }
 
     private boolean hasRecentDynamicViewer() {
-        return this.eventStream.hasViewers()
+        return this.hasDynamicSubscribers()
             || this.hasRecentEndpointViewer(DYNAMIC_PATH, "/api/dynamic")
             || this.hasRecentEndpointViewer(SIGNALS_PATH, "/api/signals")
             || this.hasRecentEndpointViewer(BLOCKS_PATH, "/api/blocks")
@@ -332,6 +339,11 @@ public final class CreateTrackMapIntegration {
     private boolean hasRecentEndpointViewer(final String path, final String alias) {
         final long timeout = TimeUnit.SECONDS.toNanos(Config.CREATE_MAP_IDLE_TIMEOUT_SECONDS);
         return this.jsonCache.accessedWithin(path, timeout) || this.jsonCache.accessedWithin(alias, timeout);
+    }
+
+    private boolean hasDynamicSubscribers() {
+        return this.eventStream.hasViewers("create-dynamic") || this.eventStream.hasViewers("create-signals")
+            || this.eventStream.hasViewers("create-blocks") || this.eventStream.hasViewers("create-trains");
     }
 
     private void beginStaticRefresh(final GlobalRailwayManager railways) {
@@ -398,27 +410,40 @@ public final class CreateTrackMapIntegration {
                 final long updatedAt = System.currentTimeMillis();
                 final Map<String, Object> data = new LinkedHashMap<>();
                 data.put("version", snapshot.railwayVersion);
-                data.put("updated_at", updatedAt);
                 data.put("tracks", trackGeometry);
                 data.put("portals", snapshot.portals);
                 data.put("stations", snapshot.stations);
                 data.put("signals", snapshot.signalGeometry);
                 data.put("signal_blocks", blockGeometry);
+                final String networkState = Util.gson().toJson(data);
+                final boolean changed = !networkState.equals(this.lastNetworkState);
+                data.put("updated_at", updatedAt);
                 final String json = Util.gson().toJson(data);
 
                 if (!this.validPublication(generation, snapshot.sequence)) {
                     return;
                 }
-                this.jsonCache.put(NETWORK_PATH, json);
-                this.jsonCache.putVolatile("/api/network", json);
+                if (changed) {
+                    this.jsonCache.put(NETWORK_PATH, json);
+                    this.jsonCache.putVolatile("/api/network", json);
+                    this.lastNetworkState = networkState;
+                }
                 this.signalRefs = snapshot.signalRefs;
                 this.knownSignalBlocks = Set.copyOf(snapshot.signalBlockPaths.keySet());
+                final Map<String, Set<String>> worlds = new LinkedHashMap<>();
+                for (final Map<String, Object> signal : snapshot.signalGeometry) {
+                    worlds.put(String.valueOf(signal.get("id")), Set.of(String.valueOf(signal.get("world"))));
+                }
+                snapshot.signalBlockPaths.forEach((id, paths) -> worlds.put(id.toString(), paths.stream().map(SampledPath::world).collect(java.util.stream.Collectors.toSet())));
+                this.dynamicWorlds = worlds;
                 this.publishedRailwayVersion = snapshot.railwayVersion;
-                this.networkRevision = updatedAt;
-                this.eventStream.publish("create-network", Util.gson().toJson(Map.of(
-                    "version", snapshot.railwayVersion,
-                    "revision", updatedAt
-                )), "base");
+                if (changed) {
+                    this.networkRevision = updatedAt;
+                    this.eventStream.publish("create-network", Util.gson().toJson(Map.of(
+                        "version", snapshot.railwayVersion,
+                        "revision", updatedAt
+                    )), "base");
+                }
                 this.lastStaticRefreshMillis = updatedAt;
                 this.nextStaticRefreshMillis = updatedAt
                     + TimeUnit.SECONDS.toMillis(Config.CREATE_MAP_STATIC_REFRESH_INTERVAL_SECONDS);
@@ -508,6 +533,7 @@ public final class CreateTrackMapIntegration {
             this.eventStream.publish("create-signals", signalsJson, "create-dynamic");
             this.lastPublishedSignals = task.signals;
         }
+        if (task.signals != null) this.publishWorldCollection("create-signals", task.signals);
         if (task.blocks != null && !task.blocks.equals(this.lastPublishedBlocks)) {
             blocksJson = Util.gson().toJson(Map.of("updated_at", task.updatedAt, "blocks", task.blocks));
             this.jsonCache.putVolatile(BLOCKS_PATH, blocksJson);
@@ -515,6 +541,7 @@ public final class CreateTrackMapIntegration {
             this.eventStream.publish("create-blocks", blocksJson, "create-dynamic");
             this.lastPublishedBlocks = task.blocks;
         }
+        if (task.blocks != null) this.publishWorldCollection("create-blocks", task.blocks);
         if (task.trains != null && !task.trains.equals(this.lastPublishedTrains)) {
             trainsJson = Util.gson().toJson(Map.of("updated_at", task.updatedAt, "trains", task.trains));
             this.jsonCache.putVolatile(TRAINS_PATH, trainsJson);
@@ -522,6 +549,7 @@ public final class CreateTrackMapIntegration {
             this.eventStream.publish("create-trains", trainsJson, "create-dynamic");
             this.lastPublishedTrains = task.trains;
         }
+        if (task.trains != null) this.publishWorldCollection("create-trains", task.trains);
         if (task.publishCombined) {
             final Map<String, Object> data = new LinkedHashMap<>();
             data.put("updated_at", task.updatedAt);
@@ -533,6 +561,28 @@ public final class CreateTrackMapIntegration {
             this.jsonCache.putVolatile("/api/dynamic", dynamicJson);
         }
         this.lastDynamicRefreshMillis = task.updatedAt;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void publishWorldCollection(final String topic, final List<Map<String, Object>> rows) {
+        final Map<String, List<Map<String, Object>>> grouped = new LinkedHashMap<>();
+        for (final Map<String, Object> row : rows) {
+            if (topic.equals("create-trains")) {
+                final List<Map<String, Object>> positions = (List<Map<String, Object>>) row.get("positions");
+                for (final String world : positions.stream().map(position -> (String) position.get("world")).collect(java.util.stream.Collectors.toSet())) {
+                    final Map<String, Object> copy = new LinkedHashMap<>(row);
+                    copy.put("positions", positions.stream().filter(position -> world.equals(position.get("world"))).toList());
+                    grouped.computeIfAbsent(world, ignored -> new ArrayList<>()).add(copy);
+                }
+            } else {
+                for (final String world : this.dynamicWorlds.getOrDefault(String.valueOf(row.get("id")), Set.of())) {
+                    grouped.computeIfAbsent(world, ignored -> new ArrayList<>()).add(row);
+                }
+            }
+        }
+        final Set<String> known = this.streamWorlds.computeIfAbsent(topic, ignored -> java.util.concurrent.ConcurrentHashMap.newKeySet());
+        known.addAll(grouped.keySet());
+        for (final String world : known) this.eventStream.publishCollection(topic, world, "id", grouped.getOrDefault(world, List.of()), Map.of());
     }
 
     private List<Map<String, Object>> signalStates() {
@@ -718,7 +768,7 @@ public final class CreateTrackMapIntegration {
         }
     }
 
-    private void publishStatus() {
+    private synchronized void publishStatus() {
         if (!this.running) {
             return;
         }
@@ -754,7 +804,17 @@ public final class CreateTrackMapIntegration {
         status.put("error", this.lastError);
         final String json = Util.gson().toJson(status);
         this.jsonCache.putVolatile(STATUS_PATH, json);
-        this.eventStream.publish("create-status", json, "base");
+        final Map<String, Object> state = new LinkedHashMap<>(status);
+        // Clock and diagnostic samples are supplied by HTTP; they must not force one SSE packet per second.
+        for (final String key : List.of("server_time", "last_dynamic_refresh", "last_static_slice_micros", "last_dynamic_capture_micros", "max_main_thread_micros")) state.remove(key);
+        if (refreshing) state.put("refresh_progress", Math.floor(this.refreshProgress * 20) / 20);
+        final String stateJson = Util.gson().toJson(state);
+        final long monotonicNow = System.nanoTime();
+        if (!stateJson.equals(this.lastStatusState) && monotonicNow - this.lastStatusEventNanos >= TimeUnit.MILLISECONDS.toNanos(500)) {
+            this.lastStatusState = stateJson;
+            this.lastStatusEventNanos = monotonicNow;
+            this.eventStream.publishState("create-status", stateJson);
+        }
     }
 
     private void publishAliases(

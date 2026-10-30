@@ -2,12 +2,14 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const {gzipSync} = require('node:zlib');
 const { chromium } = require('../build/diagnostics/node_modules/playwright');
 
-const web = path.resolve(__dirname, '../common/src/main/resources/web');
+const web = path.resolve(__dirname, process.env.SQUAREMAP_TEST_WEB_DIR ?? '../common/src/main/resources/web');
 const counts = new Map();
 let sequence = 0;
 let eventsEnabled = false;
+let modernEvents = false;
 const eventClients = new Set();
 const worldName = 'minecraft_overworld';
 const otherWorld = 'minecraft_the_nether';
@@ -24,7 +26,8 @@ const worldSettings = {
 };
 const tilePath = /^\/tiles\/minecraft_(?:overworld|the_nether)\/\d+\/-?\d+_-?\d+\.png$/;
 const server = http.createServer(async (req, res) => {
-    const pathname = new URL(req.url, 'http://localhost').pathname;
+    const requestUrl = new URL(req.url, 'http://localhost');
+    const pathname = requestUrl.pathname;
     counts.set(pathname, (counts.get(pathname) ?? 0) + 1);
     const json = value => { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
     if (pathname === '/tiles/settings.json') return json(rootSettings);
@@ -34,11 +37,19 @@ const server = http.createServer(async (req, res) => {
         return json([{id: 'spawn', name: 'Spawn', timestamp: 1, order: 0, z_index: 0, control: true, hide: false, markers: {}}]);
     }
     if (pathname === '/tiles/players.json') return json({ players: [], max: 20 });
-    if (pathname === '/tiles/create/status.json') return json({ available: false, enabled: false });
+    if (pathname === '/tiles/create/status.json') return json(modernEvents
+        ? {available:true,enabled:true,network_version:1,network_revision:1} : { available: false, enabled: false });
+    if (pathname === '/tiles/create/network.json') return json({version:1,updated_at:1,tracks:[],stations:[],signals:[],signal_blocks:[],portals:[]});
     if (pathname === '/api/events') {
         if (!eventsEnabled) { res.writeHead(404); return res.end(); }
         res.writeHead(200, {'Content-Type':'text/event-stream','Cache-Control':'no-cache'});
-        res.write('event: ready\ndata: {}\n\n');
+        res.subscription = {topics:(requestUrl.searchParams.get('topics') ?? '').split(','),world:requestUrl.searchParams.get('world')};
+        res.write('event: ready\ndata: '+JSON.stringify(modernEvents ? {protocol:2} : {})+'\n\n');
+        if (modernEvents) {
+            if (res.subscription.topics.includes('players-roster')) emit(res, 'players-roster', {epoch:'roster',seq:1,reset:true,items:[{uuid:'test-player',name:'Alex',world:worldName}],meta:{max:20}}, true);
+            if (res.subscription.topics.includes('players-positions')) emit(res, 'players-positions', {epoch:'positions',seq:1,reset:true,items:res.subscription.world === worldName ? [{uuid:'test-player',x:1,y:64,z:2,yaw:0}] : []});
+            for (const topic of res.subscription.topics.filter(topic => topic.startsWith('create-'))) emit(res, topic, {epoch:topic,seq:0,reset:true,items:[]});
+        }
         eventClients.add(res);
         req.on('close', () => eventClients.delete(res));
         return;
@@ -62,7 +73,7 @@ const server = http.createServer(async (req, res) => {
     const browser = await chromium.launch({ channel: 'msedge', headless: true });
     const failures = [];
     const ready = page => page.waitForFunction(async () => {
-        const { P } = await import('/js/modules/Squaremap.js');
+        const { P } = await import(document.querySelector('script[type="module"]').src);
         const tiles = Object.values(P.layerControl.tileLayer1?._tiles ?? {});
         return P.worldList?.curWorld?.zoom?.max === 1 && tiles.length > 0 && tiles.every(tile => tile.loaded);
     }, null, { timeout: 15000 });
@@ -95,7 +106,7 @@ const server = http.createServer(async (req, res) => {
         const before = new Map([...counts].filter(([url]) => tilePath.test(url)));
         sequence = 1;
         await page.waitForFunction(async () => {
-            const { P } = await import('/js/modules/Squaremap.js');
+            const { P } = await import(document.querySelector('script[type="module"]').src);
             return P.layerControl.tileLayer1._cursor === 1;
         }, null, { timeout: 10000 });
         const changedPath = `/tiles/${worldName}/1/0_0.png`;
@@ -105,7 +116,7 @@ const server = http.createServer(async (req, res) => {
         }
         const reloaded = [...counts].filter(([url, count]) => tilePath.test(url) && count > (before.get(url) ?? 0)).map(([url]) => url);
         assert.deepEqual(reloaded, [`/tiles/${worldName}/1/0_0.png`], JSON.stringify({before:[...before], after:[...counts], failures,
-            tiles:await page.evaluate(async()=>{const {P}=await import('/js/modules/Squaremap.js');return Object.entries(P.layerControl.tileLayer1._tiles).map(([key,tile])=>({key,coords:tile.coords,reloading:tile.reloading}));})}));
+            tiles:await page.evaluate(async()=>{const {P}=await import(document.querySelector('script[type="module"]').src);return Object.entries(P.layerControl.tileLayer1._tiles).map(([key,tile])=>({key,coords:tile.coords,reloading:tile.reloading}));})}));
         await page.screenshot({ path: path.resolve(__dirname, '../build/diagnostics/live-map.png') });
         await page.close();
 
@@ -115,7 +126,7 @@ const server = http.createServer(async (req, res) => {
         await ssePage.goto(base);
         await ready(ssePage);
         await ssePage.waitForFunction(async () => {
-            const {P} = await import('/js/modules/Squaremap.js');
+            const {P} = await import(document.querySelector('script[type="module"]').src);
             return P.createLayerManager.sseConnected && !P.worldList.curWorld.changePollInFlight;
         });
         const changesPath = `/tiles/${worldName}/changes.json`;
@@ -129,9 +140,14 @@ const server = http.createServer(async (req, res) => {
         eventsEnabled = false;
         for (const client of eventClients) client.end();
         sequence = 2;
+        await ssePage.waitForFunction(async () => {
+            const {P} = await import(document.querySelector('script[type="module"]').src);
+            return P.layerControl.tileLayer1._cursor === 2;
+        });
         await waitForRequest(changedPath, tileRequests);
         assert.ok(counts.get(changesPath) > logRequests, 'missed SSE changes must be recovered from the log');
         await ssePage.close();
+        await checkModernProtocol(browser, base, failures);
         assert.deepEqual(failures, []);
         console.log('PASS: changes.json fallback reloads only the changed visible tile; no browser exceptions');
         console.log('PASS: healthy SSE updates tiles directly, and disconnects recover missed changes through changes.json');
@@ -147,13 +163,87 @@ function assertTrueWebpFallback(requests) {
     assert.ok([...requests.keys()].some(url => tilePath.test(url)));
 }
 
+function emit(client, topic, value, compressed = false) {
+    const data = compressed ? {gzip:gzipSync(Buffer.from(JSON.stringify(value))).toString('base64')} : value;
+    client.write(`event: ${topic}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+async function checkModernProtocol(browser, base, failures) {
+    modernEvents = eventsEnabled = true;
+    worldSettings.tile_format = 'webp';
+    counts.clear();
+    const page = await browser.newPage({viewport:{width:1100,height:800}});
+    page.on('pageerror', error => failures.push(error.message));
+    await page.goto(base);
+    const state = async (page, predicate) => page.waitForFunction(predicate);
+    await state(page, async () => {
+        const {P} = await import(document.querySelector('script[type="module"]').src);
+        return P.playerList?.streamConnected && P.playerList.players.get('test-player')?.x === 1 && P.createLayerManager?.dynamicSseConnected;
+    });
+    await page.waitForTimeout(500);
+    const playerRequests = counts.get('/tiles/players.json') ?? 0;
+    await page.waitForTimeout(1500);
+    assert.equal(counts.get('/tiles/players.json') ?? 0, playerRequests, 'healthy player SSE must stop HTTP polling');
+    for (const client of eventClients) if (client.subscription.topics.includes('players-positions')) {
+        emit(client,'players-positions',{epoch:'positions',base:1,seq:2,upsert:[{uuid:'test-player',x:7}],remove:[]},true);
+        emit(client,'players-positions',{epoch:'positions',base:2,seq:3,upsert:[{uuid:'test-player',x:8}],remove:[]});
+    }
+    await state(page, async () => {
+        const {P} = await import(document.querySelector('script[type="module"]').src);
+        const player = P.playerList.players.get('test-player');
+        return player?.x === 8 && player?.name === 'Alex';
+    });
+    assert.ok([...eventClients].some(client => client.subscription.topics.join(',') === 'create-trains'));
+    assert.ok(![...eventClients].some(client => client.subscription.topics.includes('create-signals')));
+    await page.evaluate(async () => {
+        const {P} = await import(document.querySelector('script[type="module"]').src);
+        P.createLayerManager.layers.trains.remove();
+        P.createLayerManager.layers.signals.addTo(P.map);
+    });
+    await state(page, async () => {
+        const {P} = await import(document.querySelector('script[type="module"]').src);
+        return P.createLayerManager.dynamicEventSource?.url.includes('topics=create-signals&');
+    });
+    // A missing revision must trigger a reconnect and a fresh authoritative snapshot.
+    for (const client of eventClients) if (client.subscription.topics.includes('players-positions')) emit(client,'players-positions',{epoch:'positions',base:99,seq:100,upsert:[],remove:[]});
+    await state(page, async () => {
+        const {P} = await import(document.querySelector('script[type="module"]').src);
+        return P.playerList.players.get('test-player')?.x === 1 && P.playerList.streamConnected;
+    });
+    await page.evaluate(() => {
+        Object.defineProperty(document, 'visibilityState', {configurable:true,value:'hidden'});
+        document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await state(page, async () => {
+        const {P} = await import(document.querySelector('script[type="module"]').src);
+        return P.createLayerManager.eventSource === null && P.createLayerManager.dynamicEventSource === null;
+    });
+    await page.evaluate(() => {
+        Object.defineProperty(document, 'visibilityState', {configurable:true,value:'visible'});
+        document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await state(page, async () => {
+        const {P} = await import(document.querySelector('script[type="module"]').src);
+        return P.playerList.streamConnected && P.playerList.players.get('test-player')?.x === 1;
+    });
+    await page.locator(`.world-row[id="${otherWorld}"]`).click();
+    await state(page, async () => {
+        const {P} = await import(document.querySelector('script[type="module"]').src);
+        return P.createLayerManager.eventSource.url.includes('world=minecraft_the_nether') && P.playerList.streamConnected;
+    });
+    await page.close();
+    worldSettings.tile_format = 'png';
+    modernEvents = false;
+    console.log('PASS: compressed SSE snapshots, ordered field deltas, player polling suppression, layer/world subscriptions, revision recovery and hidden-tab disconnect');
+}
+
 async function checkWorldSwitchingAndCreatePanel(page) {
     const spawnRows = page.locator('.drawer-layer-row').filter({hasText: /^Spawn$/});
     await spawnRows.first().waitFor();
     for (const world of [otherWorld, worldName, otherWorld, worldName]) {
         await page.locator(`.world-row[id="${world}"]`).click();
         await page.waitForFunction(async name => {
-            const {P} = await import('/js/modules/Squaremap.js');
+            const {P} = await import(document.querySelector('script[type="module"]').src);
             return P.worldList.curWorld.name === name && P.worldList.curWorld.markerLayers.size === 1;
         }, world);
         await page.waitForFunction(() => [...document.querySelectorAll('.drawer-layer-row .layer-name')].some(row => row.textContent === 'Spawn'));
@@ -163,7 +253,7 @@ async function checkWorldSwitchingAndCreatePanel(page) {
     }
     assert.equal(await page.locator('.world-row img').evaluateAll(images => images.every(image => image.complete && image.naturalWidth > 0)), true);
     await page.evaluate(async () => {
-        const {P} = await import('/js/modules/Squaremap.js');
+        const {P} = await import(document.querySelector('script[type="module"]').src);
         P.createLayerManager.applyStatus({available: true, enabled: false});
     });
     const panel = page.locator('.create-map-status');

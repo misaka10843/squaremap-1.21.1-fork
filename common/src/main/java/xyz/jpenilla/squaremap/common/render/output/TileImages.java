@@ -30,6 +30,21 @@ final class TileImages {
         this.storage.writeTile(tile.zoom(), tile.x(), tile.z(), image);
     }
 
+    boolean needsWrite(final TileCoordinate tile, final BufferedImage image) {
+        boolean transparent = true;
+        final int[] row = new int[image.getWidth()];
+        for (int y = 0; y < image.getHeight() && transparent; y++) {
+            image.getRGB(0, y, row.length, 1, row, 0, row.length);
+            for (final int pixel : row) if ((pixel >>> 24) != 0) { transparent = false; break; }
+        }
+        final Path png = this.directory.resolve(Integer.toString(tile.zoom())).resolve(tile.x() + "_" + tile.z() + ".png");
+        final Path webp = this.directory.resolve(Integer.toString(tile.zoom())).resolve(tile.x() + "_" + tile.z() + ".webp");
+        if (transparent) return java.nio.file.Files.exists(png) || java.nio.file.Files.exists(webp);
+        if (!java.nio.file.Files.isRegularFile(this.path(tile))) return true;
+        if (Config.TILE_FORMAT.equals("webp") && Config.TILE_KEEP_PNG) return !java.nio.file.Files.isRegularFile(png);
+        return !Config.TILE_KEEP_PNG && java.nio.file.Files.exists(Config.TILE_FORMAT.equals("png") ? webp : png);
+    }
+
     TileStorage.Stats compact(final boolean migrate) throws IOException {
         return this.storage.compact(migrate);
     }

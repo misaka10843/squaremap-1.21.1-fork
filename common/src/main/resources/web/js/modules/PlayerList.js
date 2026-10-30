@@ -1,5 +1,6 @@
 import { Player } from "./util/Player.js";
 import { P } from './Squaremap.js';
+import { DeltaCollection } from './util/DeltaCollection.js';
 
 class PlayerList {
     constructor(json) {
@@ -7,16 +8,20 @@ class PlayerList {
         this.markers = new Map();
         this.following = null;
         this.firstTick = true;
+        this.resetStream();
         this.label = json.player_list_label;
         P.map.createPane("nameplate").style.zIndex = 1000;
     }
     tick() {
+        if (this.streamConnected || this.requestInFlight) return;
         if (P.staticMode) {
             if (this.staticRequested) return;
             this.staticRequested = true;
         }
         if (P.tick_count % P.worldList.curWorld.player_tracker.update_interval == 0) {
+            this.requestInFlight = true;
             P.getJSON("tiles/players.json", (json) => {
+                if (this.streamConnected) return;
                 this.updatePlayerList(json.players);
                 const title = `${this.label}`
                     .replace(/{cur}/g, json.players.length)
@@ -24,8 +29,23 @@ class PlayerList {
                 if (P.sidebar.players.legend.innerHTML !== title) {
                     P.sidebar.players.legend.innerHTML = title;
                 }
-            });
+            }).finally(() => { this.requestInFlight = false; });
         }
+    }
+    resetStream() {
+        this.streamConnected = false;
+        this.roster = new DeltaCollection('uuid');
+        this.positions = new DeltaCollection('uuid');
+    }
+    applyStream(topic, message) {
+        const collection = topic === 'players-roster' ? this.roster : this.positions;
+        if (!collection.apply(message)) return false;
+        const rows = [...this.roster.items.values()].map(player => ({...player,
+            ...(player.world === P.worldList?.curWorld?.name ? this.positions.items.get(String(player.uuid)) : {})}));
+        this.updatePlayerList(rows);
+        P.sidebar.players.legend.innerHTML = String(this.label)
+            .replace(/{cur}/g, rows.length).replace(/{max}/g, this.roster.meta.max ?? '???');
+        return true;
     }
     showPlayer(uuid) {
         const player = this.players.get(uuid);

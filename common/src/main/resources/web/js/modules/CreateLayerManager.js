@@ -1,4 +1,6 @@
 import { P } from './Squaremap.js';
+import { DeltaCollection } from './util/DeltaCollection.js';
+import { compressionQuery, listen } from './util/SseMessages.js';
 
 class CreateLayerManager {
     constructor() {
@@ -29,10 +31,16 @@ class CreateLayerManager {
         this.dynamicEventSource = null;
         this.sseConnected = false;
         this.dynamicSseConnected = false;
+        this.collections = new Map();
+        this.serverClockOffset = 0;
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible' && !P.staticMode) {
+                this.connectEvents();
+                this.syncDynamicEvents();
                 this.checkStatus();
                 P.worldList?.curWorld?.pollChanges();
+            } else if (document.visibilityState !== 'visible') {
+                this.closeEvents();
             }
         });
         this.checkStatus();
@@ -40,68 +48,112 @@ class CreateLayerManager {
     }
 
     connectEvents() {
-        if (P.staticMode || !window.EventSource || this.eventSource != null) return;
-        const source = new EventSource('api/events?topics=base');
+        if (P.staticMode || document.visibilityState !== 'visible' || !window.EventSource) return;
+        const world = P.worldList?.curWorld?.name ?? '';
+        if (this.eventSource != null && this.subscriptionWorld === world) return;
+        this.eventSource?.close();
+        this.sseConnected = false;
+        P.playerList?.resetStream();
+        this.subscriptionWorld = world;
+        const source = new EventSource(`api/events?protocol=2&topics=base,players-roster,players-positions&world=${encodeURIComponent(world)}${compressionQuery()}`);
         this.eventSource = source;
-        source.addEventListener('ready', () => {
+        const current = () => this.eventSource === source;
+        const failed = () => {
+            if (!current()) return;
+            source.close(); this.eventSource = null; this.sseConnected = false; P.playerList.streamConnected = false;
+            window.setTimeout(() => this.connectEvents(), 1000);
+        };
+        source.addEventListener('ready', event => {
+            if (this.eventSource !== source) return;
             this.sseConnected = true;
+            P.playerList.streamConnected = this.parseEvent(event)?.protocol === 2;
             P.worldList?.curWorld?.pollChanges();
             this.checkStatus();
             this.syncDynamicEvents();
         });
-        source.addEventListener('create-status', event => this.applyStatus(this.parseEvent(event)));
-        source.addEventListener('create-network', () => this.refreshNetwork());
-        source.addEventListener('tiles-invalidated', event => {
-            const data = this.parseEvent(event);
+        listen(source, 'create-status', data => this.applyStatus(data), current, failed);
+        listen(source, 'create-network', () => this.refreshNetwork(), current, failed);
+        for (const topic of ['players-roster', 'players-positions']) {
+            listen(source, topic, data => { if (!P.playerList.applyStream(topic, data)) failed(); }, current, failed);
+        }
+        listen(source, 'tiles-invalidated', data => {
             if (data?.world === P.worldList?.curWorld?.name && document.visibilityState === 'visible') {
                 this.invalidateVisibleTiles(data.tiles ?? []);
             }
-        });
+        }, current, failed);
         source.onerror = () => {
+            if (this.eventSource !== source) return;
             this.sseConnected = false;
+            P.playerList.streamConnected = false;
             // EventSource reconnects automatically. Existing polling is the fallback
             // for external static web servers where /api/events does not exist.
         };
     }
 
+    closeEvents() {
+        this.eventSource?.close();
+        this.dynamicEventSource?.close();
+        this.eventSource = this.dynamicEventSource = null;
+        this.sseConnected = this.dynamicSseConnected = false;
+        P.playerList.streamConnected = false;
+    }
+
+    worldChanged() {
+        this.connectEvents();
+        this.syncDynamicEvents();
+        if (this.initialized) { this.redrawAll(); if (this.available) this.refreshNetwork(); }
+    }
+
     syncDynamicEvents() {
-        const wanted = !P.staticMode && this.initialized && this.dynamicLayersVisible();
+        const topics = !P.staticMode && this.available && this.initialized && document.visibilityState === 'visible'
+            ? ['signals', 'blocks', 'trains'].filter(kind => P.map.hasLayer(this.layers[kind])).map(kind => `create-${kind}`) : [];
+        const wanted = topics.length > 0;
+        const world = P.worldList?.curWorld?.name ?? '';
+        const subscription = `${world}:${topics.join(',')}`;
         if (!wanted) {
             if (this.dynamicEventSource != null) this.dynamicEventSource.close();
             this.dynamicEventSource = null;
             this.dynamicSseConnected = false;
             return;
         }
-        if (!window.EventSource || this.dynamicEventSource != null) return;
-        const source = new EventSource('api/events?topics=create-dynamic');
+        if (!window.EventSource || (this.dynamicEventSource != null && this.dynamicSubscription === subscription)) return;
+        this.dynamicEventSource?.close();
+        this.dynamicSseConnected = false;
+        this.dynamicSubscription = subscription;
+        this.collections.clear();
+        this.signalData = []; this.blockData = []; this.trainData = [];
+        const source = new EventSource(`api/events?protocol=2&topics=${topics.join(',')}&world=${encodeURIComponent(world)}${compressionQuery()}`);
         this.dynamicEventSource = source;
-        source.addEventListener('ready', async () => {
-            // Seed state once because SSE intentionally contains no unbounded replay log.
-            await Promise.all([this.refreshSignalData(), this.refreshBlockData(), this.refreshTrainData()]);
+        const current = () => this.dynamicEventSource === source;
+        const failed = () => {
+            if (!current()) return;
+            source.close(); this.dynamicEventSource = null; this.dynamicSseConnected = false;
+            window.setTimeout(() => this.syncDynamicEvents(), 1000);
+        };
+        source.addEventListener('ready', async event => {
+            if (this.dynamicEventSource !== source) return;
+            // Older servers retain the full JSON snapshot path.
+            if (this.parseEvent(event)?.protocol !== 2) { await this.refreshDynamic(); return; }
             this.dynamicSseConnected = true;
         });
-        source.addEventListener('create-signals', event => {
-            const data = this.parseEvent(event);
+        for (const kind of ['signals', 'blocks', 'trains']) listen(source, `create-${kind}`, data => {
             if (data == null) return;
-            this.lastSignalUpdate = data.updated_at;
-            this.signalData = data.signals ?? [];
-            this.renderSignals();
-        });
-        source.addEventListener('create-blocks', event => {
-            const data = this.parseEvent(event);
-            if (data == null) return;
-            this.lastBlockUpdate = data.updated_at;
-            this.blockData = data.blocks ?? [];
-            this.renderBlocks();
-        });
-        source.addEventListener('create-trains', event => {
-            const data = this.parseEvent(event);
-            if (data == null) return;
-            this.lastTrainUpdate = data.updated_at;
-            this.trainData = data.trains ?? [];
-            this.renderTrains();
-        });
+            let rows;
+            if (Number.isSafeInteger(data.seq)) {
+                const collection = this.collections.get(kind) ?? new DeltaCollection();
+                this.collections.set(kind, collection);
+                if (!collection.apply(data)) {
+                    failed(); return;
+                }
+                rows = [...collection.items.values()];
+            } else rows = data[kind] ?? [];
+            if (kind === 'signals') { this.signalData = rows; this.renderSignals(); }
+            if (kind === 'blocks') { this.blockData = rows; this.renderBlocks(); }
+            if (kind === 'trains') { this.trainData = rows; this.renderTrains(); }
+            this.updateStatusPanel();
+        }, current, failed);
         source.onerror = () => {
+            if (this.dynamicEventSource !== source) return;
             this.dynamicSseConnected = false;
         };
     }
@@ -117,6 +169,7 @@ class CreateLayerManager {
     tick() {
         this.tickCount++;
         if (document.visibilityState !== 'visible') return;
+        this.updateStatusPanel();
         if (!P.staticMode && !this.sseConnected && (this.tickCount % 5 === 0 || !this.initialized)) {
             this.checkStatus();
         }
@@ -132,9 +185,17 @@ class CreateLayerManager {
     }
 
     async refreshNetwork() {
-        const json = await this.fetchJson('tiles/create/network.json');
+        const world = P.worldList?.curWorld?.name;
+        if (!world) return;
+        if (this.networkRequest != null && this.networkRequestWorld === world) return;
+        this.networkRequestWorld = world;
+        const request = this.fetchJson(`tiles/create/network.json?world=${encodeURIComponent(world)}`);
+        this.networkRequest = request;
+        const json = await request;
+        if (this.networkRequest === request) this.networkRequest = null;
+        if (P.worldList?.curWorld?.name !== world) return;
         if (json == null) return;
-        const revision = `${json.version}:${json.updated_at ?? 0}`;
+        const revision = `${json.version}:${json.updated_at ?? 0}:${world}`;
         if (this.networkRevision !== revision || this.network == null) {
             this.networkVersion = json.version;
             this.networkRevision = revision;
@@ -168,6 +229,7 @@ class CreateLayerManager {
 
     async refreshSignalData() {
         const data = await this.fetchJson('tiles/create/signals.json');
+        if (this.dynamicSseConnected) return;
         if (data == null || data.updated_at === this.lastSignalUpdate) return;
         this.lastSignalUpdate = data.updated_at;
         this.signalData = data.signals ?? [];
@@ -176,6 +238,7 @@ class CreateLayerManager {
 
     async refreshBlockData() {
         const data = await this.fetchJson('tiles/create/blocks.json');
+        if (this.dynamicSseConnected) return;
         if (data == null || data.updated_at === this.lastBlockUpdate) return;
         this.lastBlockUpdate = data.updated_at;
         this.blockData = data.blocks ?? [];
@@ -184,6 +247,7 @@ class CreateLayerManager {
 
     async refreshTrainData() {
         const data = await this.fetchJson('tiles/create/trains.json');
+        if (this.dynamicSseConnected) return;
         if (data == null || data.updated_at === this.lastTrainUpdate) return;
         this.lastTrainUpdate = data.updated_at;
         this.trainData = data.trains ?? [];
@@ -191,7 +255,10 @@ class CreateLayerManager {
     }
 
     async checkStatus() {
+        if (this.statusRequestInFlight) return;
+        this.statusRequestInFlight = true;
         const status = await this.fetchJson('tiles/create/status.json');
+        this.statusRequestInFlight = false;
         if (status == null) return;
         this.applyStatus(status);
     }
@@ -200,6 +267,7 @@ class CreateLayerManager {
         if (status == null) return;
         const wasAvailable = this.available;
         this.status = status;
+        if (Number.isFinite(status.server_time)) this.serverClockOffset = status.server_time - Date.now();
         const present = status.available === true;
         this.available = present && status.enabled !== false;
 
@@ -216,7 +284,7 @@ class CreateLayerManager {
                 window.clearInterval(this.dynamicTimer);
                 this.dynamicTimer = null;
             }
-            const revision = `${status.network_version}:${status.network_revision ?? 0}`;
+            const revision = `${status.network_version}:${status.network_revision ?? 0}:${P.worldList?.curWorld?.name}`;
             if (this.network == null || this.networkRevision !== revision) {
                 this.refreshNetwork();
             }
@@ -226,6 +294,7 @@ class CreateLayerManager {
         }
 
         if (status.error) console.error('Create map integration:', status.error);
+        this.syncDynamicEvents();
         this.updateStatusPanel();
     }
 
@@ -795,7 +864,7 @@ class CreateLayerManager {
             this.statusRingElement.classList.toggle('sleeping', sleeping);
         }
 
-        const now = Number(status.server_time ?? Date.now());
+        const now = Date.now() + this.serverClockOffset;
         let meta;
         let countdownSec = null;
         if (status.enabled === false) {

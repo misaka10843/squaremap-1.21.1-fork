@@ -48,15 +48,22 @@ public final class RegionImage {
     }
 
     // Draws the rendered pixels over the region's max zoom tile image, leaving the rest unchanged
-    void drawInto(final BufferedImage image) {
+    boolean drawInto(final BufferedImage image) {
         final int[][] pixels = this.pixels;
+        boolean changed = false;
+        final int[] previous = new int[TileImages.SIZE];
         for (int x = 0; x < TileImages.SIZE; x++) {
+            image.getRGB(x, 0, 1, TileImages.SIZE, previous, 0, 1);
             for (int z = 0; z < TileImages.SIZE; z++) {
                 final int pixel = pixels[x][z];
-                if (pixel != Integer.MIN_VALUE) {
-                    image.setRGB(x, z, pixel);
+                final int visible = (pixel >>> 24) == 0 ? 0 : pixel;
+                final int old = (previous[z] >>> 24) == 0 ? 0 : previous[z];
+                if (pixel != Integer.MIN_VALUE && visible != old) {
+                    image.setRGB(x, z, visible);
+                    changed = true;
                 }
             }
         }
+        return changed;
     }
 }

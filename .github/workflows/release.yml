@@ -7,7 +7,7 @@ on:
         description: 'Release tag: must equal v + the version in gradle.properties'
         required: true
         type: string
-        default: v1.3.2-fork.2
+        default: v1.3.2-fork.3
       draft:
         description: Create a draft release for manual publication
         type: boolean

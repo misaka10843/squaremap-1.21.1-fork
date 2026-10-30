@@ -188,6 +188,31 @@ class RegionImageSaveQueueTest {
         assertEquals(List.of(new TileCoordinate(1, 0, 0), new TileCoordinate(0, 0, 0)), written);
     }
 
+    @Test
+    void identicalPixelsDoNotRewriteOrNotifyButMissingParentsAreRebuilt() throws Exception {
+        final RegionImage image = new RegionImage(new RegionCoordinate(0, 0), 1);
+        fillBlock(image, 0, 0, 0xFFFF0000);
+        this.save(image);
+        final Path child = this.tiles.resolve("1/0_0.png");
+        final BufferedImage existing = this.read(1, 0, 0);
+        existing.setRGB(10, 10, 0x00FF0000);
+        ImageIO.write(existing, "png", child.toFile());
+        image.setPixel(10, 10, 0x00000000); // Invisible RGB differences must not trigger a download.
+        final var sentinel = java.nio.file.attribute.FileTime.fromMillis(123000);
+        Files.setLastModifiedTime(child, sentinel);
+        final List<TileCoordinate> written = new CopyOnWriteArrayList<>();
+        final RegionImageSaveQueue identical = new RegionImageSaveQueue(this.tiles, 1, 100, Executors.defaultThreadFactory(), written::add);
+        try { identical.saveImage(image); } finally { identical.shutdown(); }
+        assertTrue(written.isEmpty());
+        assertEquals(sentinel, Files.getLastModifiedTime(child));
+        Files.delete(this.tiles.resolve("0/0_0.png"));
+        final RegionImageSaveQueue repair = new RegionImageSaveQueue(this.tiles, 1, 100, Executors.defaultThreadFactory(), written::add);
+        try { repair.saveImage(image); } finally { repair.shutdown(); }
+        assertEquals(List.of(new TileCoordinate(0, 0, 0)), written);
+        assertEquals(sentinel, Files.getLastModifiedTime(child));
+        assertEquals(0xFFFF0000, this.read(0, 0, 0).getRGB(0, 0));
+    }
+
     private void save(final RegionImage... images) throws InterruptedException {
         final RegionImageSaveQueue queue = new RegionImageSaveQueue(this.tiles, 2, 100, Executors.defaultThreadFactory(), tile -> { });
         try {

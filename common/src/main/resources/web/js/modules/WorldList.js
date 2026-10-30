@@ -81,6 +81,7 @@ class WorldList {
         // load new world
         const world = this.worlds.get(name);
         this.curWorld = world;
+        P.createLayerManager?.worldChanged();
         for (const link of P.sidebar.worlds.element.querySelectorAll('a')) {
             link.classList.toggle('active', link.id === name);
         }

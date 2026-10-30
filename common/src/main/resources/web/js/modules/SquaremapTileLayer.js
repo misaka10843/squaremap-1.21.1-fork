@@ -14,11 +14,19 @@ export const SquaremapTileLayer = L.TileLayer.extend({
         /** @type {string | null} */
         this._epoch = options.changes?.epoch ?? null;
         this._cursor = options.changes?.seq ?? 0;
+        this._baseline = `b${this._cursor}`;
+        this._generation = 0;
+        this._versions = new Map();
+        this._requests = new Map();
     },
 
     // use the tile's zoom rather than the map's, tiles from the previous zoom can still be on screen
     getTileUrl: function (coords) {
-        return L.Util.template(this._url, L.Util.extend({ x: coords.x, y: coords.y, z: coords.z }, this.options));
+        const url = L.Util.template(this._url, L.Util.extend({ x: coords.x, y: coords.y, z: coords.z }, this.options));
+        if (this._epoch == null) return url;
+        const changed = this._versions.get(`${coords.x}:${coords.y}:${coords.z}`);
+        const version = changed == null ? this._baseline : `c${changed}`;
+        return `${url}?v=${encodeURIComponent(this._epoch + '.' + version)}`;
     },
 
     createTile: function (coords, done) {
@@ -74,31 +82,38 @@ export const SquaremapTileLayer = L.TileLayer.extend({
      * @param cache {RequestCache}
      * @returns {Promise<string | null>}
      */
-    _fetchTile: function (coords, cache = this._revalidate ? "no-cache" : "default") {
+    _fetchTile: function (coords, cache = this._revalidate && this._epoch == null ? "no-cache" : "default") {
         // fetch rather than img src, so the browser revalidates instead of reusing an image already loaded in this page
         const primary = this.getTileUrl(coords);
+        const webp = new URL(primary, document.baseURI).pathname.endsWith('.webp');
         const request = async (url, fallback) => {
             const controller = new AbortController();
+            const key = this._tileCoordsToKey(coords);
+            const controllers = this._requests.get(key) ?? new Set();
+            controllers.add(controller);
+            this._requests.set(key, controllers);
             const timer = setTimeout(() => controller.abort(), 10000);
             try {
                 const res = await fetch(url, {cache, signal: controller.signal});
                 if (res.status === 404) {
-                    return fallback ? request(url.slice(0, -5) + '.png', false) : this.options.errorTileUrl;
+                    return fallback ? request(url.replace(/\.webp(?=\?|$)/, '.png'), false) : this.options.errorTileUrl;
                 }
                 if (!res.ok) {
                     return null;
                 }
                 // the embedded web server answers missing tiles with an empty 200
                 const blob = await res.blob();
-                if (blob.size === 0) return fallback ? request(url.slice(0, -5) + '.png', false) : this.options.errorTileUrl;
+                if (blob.size === 0) return fallback ? request(url.replace(/\.webp(?=\?|$)/, '.png'), false) : this.options.errorTileUrl;
                 return URL.createObjectURL(blob);
             } catch {
                 return null;
             } finally {
                 clearTimeout(timer);
+                controllers.delete(controller);
+                if (controllers.size === 0 && this._requests.get(key) === controllers) this._requests.delete(key);
             }
         };
-        return request(primary, primary.endsWith('.webp'));
+        return request(primary, webp);
     },
 
     /**
@@ -134,7 +149,12 @@ export const SquaremapTileLayer = L.TileLayer.extend({
             if (seq > since) {
                 // same format as _tileCoordsToKey
                 changed.add(`${x}:${y}:${z}`);
+                this._versions.set(`${x}:${y}:${z}`, seq);
             }
+        }
+        if (this._versions.size > 8192) {
+            this._baseline = `r${Date.now()}.${++this._generation}`;
+            this._versions.clear();
         }
         for (const key in this._tiles) {
             if (changed.has(key)) {
@@ -147,6 +167,8 @@ export const SquaremapTileLayer = L.TileLayer.extend({
     },
 
     _reloadAll: function () {
+        this._baseline = `r${Date.now()}.${++this._generation}`;
+        this._versions.clear();
         for (const key in this._tiles) {
             this._reloadTile(this._tiles[key]);
         }
@@ -229,6 +251,8 @@ export const SquaremapTileLayer = L.TileLayer.extend({
     },
 
     _removeTile: function (key) {
+        for (const controller of this._requests.get(key) ?? []) controller.abort();
+        this._requests.delete(key);
         clearTimeout(this._tiles[key]?.retry);
         L.TileLayer.prototype._removeTile.call(this, key);
     },
